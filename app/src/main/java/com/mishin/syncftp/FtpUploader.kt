@@ -1,5 +1,6 @@
-package com.syncftp
+package com.mishin.syncftp
 
+import com.syncftp.CameraSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.apache.commons.net.ftp.FTP
@@ -7,9 +8,9 @@ import org.apache.commons.net.ftp.FTPClient
 import java.io.File
 import java.io.FileInputStream
 
-object FtpSync {
-
-    suspend fun testConnection(settings: Settings): Boolean {
+object FtpUploader {
+    
+    suspend fun testConnection(settings: CameraSettings): Boolean {
         return withContext(Dispatchers.IO) {
             val client = FTPClient()
             try {
@@ -22,37 +23,36 @@ object FtpSync {
             } finally {
                 try {
                     client.disconnect()
-                } catch (e: Exception) {
-                    // Ignore disconnect errors
-                }
+                } catch (e: Exception) { }
             }
         }
     }
-
-    suspend fun uploadFile(settings: Settings, file: File) {
-        withContext(Dispatchers.IO) {
+    
+    suspend fun uploadFile(settings: CameraSettings, file: File, remotePath: String): Boolean {
+        return withContext(Dispatchers.IO) {
             val client = FTPClient()
             try {
                 client.connect(settings.server, settings.port)
                 client.login(settings.username, settings.password)
                 client.enterLocalPassiveMode()
                 client.setFileType(FTP.BINARY_FILE_TYPE)
-                client.setFileTransferMode(FTP.BINARY_FILE_TYPE)
-
-                FileInputStream(file).use { inputStream ->
-                    val done = client.storeFile(file.name, inputStream)
-                    if (!done) {
-                        throw Exception("FTP store failed: ${client.replyString}")
-                    }
+                
+                // Create directory if needed
+                val remoteDir = settings.serverFolder
+                if (remoteDir.isNotEmpty()) {
+                    client.makeDirectory(remoteDir)
+                    client.changeWorkingDirectory(remoteDir)
                 }
-
-                client.logout()
+                
+                FileInputStream(file).use { inputStream ->
+                    val done = client.storeFile(remotePath, inputStream)
+                    return@withContext done
+                }
             } finally {
                 try {
+                    client.logout()
                     client.disconnect()
-                } catch (e: Exception) {
-                    // Ignore disconnect errors
-                }
+                } catch (e: Exception) { }
             }
         }
     }
