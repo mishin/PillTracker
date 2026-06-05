@@ -1,11 +1,8 @@
 package com.syncftp
 
 import android.Manifest
-import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.*
@@ -191,56 +188,59 @@ fun CameraScreen(
                         object : ImageCapture.OnImageSavedCallback {
                             override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                                 scope.launch {
-                                    statusMessage = "Сжатие фото..."
+                                    try {
+                                        statusMessage = "Сжатие фото..."
 
-                                    val compressedFile = File(context.cacheDir, "compressed_$fileName")
-                                    val compressionSuccess = ImageCompressor.compressImage(
-                                        photoFile.absolutePath,
-                                        compressedFile
-                                    )
+                                        val compressedFile = File(context.cacheDir, "compressed_$fileName")
+                                        val compressionSuccess = ImageCompressor.compressImage(
+                                            photoFile.absolutePath,
+                                            compressedFile
+                                        )
 
-                                    photoFile.delete()
+                                        photoFile.delete()
 
-                                    if (!compressionSuccess) {
-                                        statusMessage = "Ошибка сжатия"
-                                        isUploading = false
-                                        return@launch
-                                    }
-
-                                    statusMessage = "Отправка на сервер..."
-
-                                    val uploadSuccess = try {
-                                        when (settings!!.protocol) {
-                                            "ftp" -> FtpUploader.uploadFile(settings!!, compressedFile, fileName)
-                                            else -> SftpUploader.uploadFile(settings!!, compressedFile, fileName)
+                                        if (!compressionSuccess) {
+                                            statusMessage = "Ошибка сжатия"
+                                            isUploading = false
+                                            return@launch
                                         }
-                                    } catch (e: Exception) {
-                                        statusMessage = "Ошибка: ${e.message}"
-                                        isUploading = false
+
+                                        statusMessage = "Отправка на сервер..."
+
+                                        val uploadSuccess = try {
+                                            when (settings!!.protocol) {
+                                                "ftp" -> FtpUploader.uploadFile(settings!!, compressedFile, fileName)
+                                                else -> SftpUploader.uploadFile(settings!!, compressedFile, fileName)
+                                            }
+                                        } catch (e: Exception) {
+                                            statusMessage = "Ошибка: ${e.message}"
+                                            isUploading = false
+                                            compressedFile.delete()
+                                            return@launch
+                                        }
+
+                                        if (uploadSuccess) {
+                                            statusMessage = "✅ Фото отправлено: $fileName"
+                                            onPhotoTaken(compressedFile.absolutePath)
+
+                                            // Добавляем в историю (внутри корутины, всё правильно)
+                                            val historyItem = UploadHistoryItem(
+                                                fileName = fileName,
+                                                fileSize = compressedFile.length(),
+                                                uploadDate = System.currentTimeMillis(),
+                                                status = "✅ Успешно",
+                                                remotePath = "${settings!!.serverFolder}$fileName"
+                                            )
+                                            settingsDataStore.addToHistory(historyItem)
+                                        } else {
+                                            statusMessage = "❌ Ошибка отправки"
+                                        }
+
                                         compressedFile.delete()
-                                        return@launch
+                                    } finally {
+                                        isUploading = false
                                     }
-
-                                    if (uploadSuccess) {
-                                        statusMessage = "✅ Фото отправлено: $fileName"
-                                        onPhotoTaken(compressedFile.absolutePath)
-                                    } else {
-                                        statusMessage = "❌ Ошибка отправки"
-                                    }
-
-                                    compressedFile.delete()
-                                    isUploading = false
                                 }
-
-                                // После успешной отправки добавить в историю
-                                val historyItem = UploadHistoryItem(
-                                    fileName = fileName,
-                                    fileSize = compressedFile.length(),
-                                    uploadDate = System.currentTimeMillis(),
-                                    status = "✅ Успешно",
-                                    remotePath = "${settings!!.serverFolder}$fileName"
-                                )
-                                settingsDataStore.addToHistory(historyItem)
                             }
 
                             override fun onError(exception: ImageCaptureException) {
