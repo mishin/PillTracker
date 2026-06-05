@@ -6,12 +6,12 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import com.mishin.syncftp.UploadHistoryItem
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.map
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.encodeToString
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import com.mishin.syncftp.UploadHistoryItem
 
 private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "settings")
 
@@ -59,15 +59,18 @@ class SettingsDataStore(private val context: Context) {
     }
 
     suspend fun addToHistory(item: UploadHistoryItem) {
-        val currentHistory = uploadHistoryFlow.first().toMutableList()
-        currentHistory.add(0, item) // Новые сверху
-        // Оставляем только последние 50 записей
-        if (currentHistory.size > 50) {
-            currentHistory.removeAt(currentHistory.lastIndex)
-        }
-        val json = Json.encodeToString(currentHistory)
-        context.dataStore.edit { preferences ->
-            preferences[UPLOAD_HISTORY] = json
+        try {
+            val currentHistory = uploadHistoryFlow.first().toMutableList()
+            currentHistory.add(0, item)
+            if (currentHistory.size > 50) {
+                currentHistory.removeAt(currentHistory.lastIndex)
+            }
+            val json = Json.encodeToString(currentHistory)
+            context.dataStore.edit { preferences ->
+                preferences[UPLOAD_HISTORY] = json
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 

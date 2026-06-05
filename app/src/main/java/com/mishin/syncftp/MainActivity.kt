@@ -9,7 +9,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.core.content.ContextCompat
 import com.mishin.syncftp.ui.theme.SyncFTPTheme
 import com.syncftp.*
@@ -19,6 +18,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var settingsDataStore: SettingsDataStore
     val showCamera = mutableStateOf(false)
     val showHistory = mutableStateOf(false)
+    val showFtpBrowser = mutableStateOf(false)
     val currentPhotoPath = mutableStateOf<String?>(null)
 
     private val requestPermissionLauncher = registerForActivityResult(
@@ -55,12 +55,19 @@ class MainActivity : ComponentActivity() {
                             onBack = { showHistory.value = false }
                         )
                     }
+                    showFtpBrowser.value -> {
+                        FtpBrowserScreen(
+                            settingsDataStore = settingsDataStore,
+                            onBack = { showFtpBrowser.value = false }
+                        )
+                    }
                     else -> {
                         SettingsScreen(
                             settingsDataStore = settingsDataStore,
                             onOpenCamera = { showCamera.value = true },
                             photoPath = currentPhotoPath.value,
-                            onOpenHistory = { showHistory.value = true }
+                            onOpenHistory = { showHistory.value = true },
+                            onOpenFtpBrowser = { showFtpBrowser.value = true }
                         )
                     }
                 }

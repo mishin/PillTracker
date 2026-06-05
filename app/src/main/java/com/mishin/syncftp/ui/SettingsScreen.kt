@@ -1,7 +1,6 @@
 package com.syncftp
 
 import android.widget.Toast
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -17,7 +16,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -31,7 +29,8 @@ fun SettingsScreen(
     settingsDataStore: SettingsDataStore,
     onOpenCamera: () -> Unit,
     photoPath: String?,
-    onOpenHistory: () -> Unit
+    onOpenHistory: () -> Unit,
+    onOpenFtpBrowser: () -> Unit
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -77,7 +76,7 @@ fun SettingsScreen(
                 .verticalScroll(scrollState),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Эмблема и название
+            // Эмблема
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -85,7 +84,6 @@ fun SettingsScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    // Кастомная эмблема (используем иконку)
                     Box(
                         modifier = Modifier
                             .size(80.dp)
@@ -242,7 +240,6 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // Test connection button
                 Button(
                     onClick = {
                         scope.launch {
@@ -276,7 +273,6 @@ fun SettingsScreen(
                     Text(if (isTesting) "..." else "Проверить")
                 }
 
-                // Camera button
                 Button(
                     onClick = onOpenCamera,
                     modifier = Modifier.weight(1f),
@@ -286,6 +282,17 @@ fun SettingsScreen(
                     Icon(Icons.Default.CameraAlt, null)
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("Камера")
+                }
+
+                Button(
+                    onClick = onOpenFtpBrowser,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2196F3)),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Icon(Icons.Default.Folder, null)
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("FTP")
                 }
             }
 
@@ -354,4 +361,16 @@ fun SettingsScreen(
             }
         }
     }
+}
+
+@Composable
+fun SyncFTPTheme(content: @Composable () -> Unit) {
+    MaterialTheme(
+        colorScheme = lightColorScheme(
+            primary = Color(0xFF2196F3),
+            secondary = Color(0xFF4CAF50),
+            tertiary = Color(0xFFFF9800)
+        ),
+        content = content
+    )
 }
