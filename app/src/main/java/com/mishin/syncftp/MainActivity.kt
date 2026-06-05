@@ -1,4 +1,4 @@
-package com.syncftp
+package com.mishin.syncftp
 
 import android.Manifest
 import android.content.pm.PackageManager
@@ -9,12 +9,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
-import com.mishin.syncftp.SettingsScreen
 import com.mishin.syncftp.ui.theme.SyncFTPTheme
-import kotlinx.coroutines.launch
+import com.syncftp.CameraScreen
+import com.syncftp.SettingsDataStore
 
 class MainActivity : ComponentActivity() {
 

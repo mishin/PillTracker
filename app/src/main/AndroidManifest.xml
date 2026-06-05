@@ -1,13 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
-        android:maxSdkVersion="28" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
         android:allowBackup="true"
@@ -15,11 +13,10 @@
         android:label="SyncFTP Camera"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.SyncFTP"
-        android:requestLegacyExternalStorage="true">
+        android:theme="@style/Theme.SyncFTP">
 
         <activity
-            android:name=".MainActivity"
+            android:name="com.mishin.syncftp.MainActivity"
             android:exported="true"
             android:configChanges="orientation|screenSize">
             <intent-filter>
@@ -38,4 +35,5 @@
                 android:resource="@xml/file_paths" />
         </provider>
     </application>
+
 </manifest>
