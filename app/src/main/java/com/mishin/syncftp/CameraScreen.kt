@@ -3,8 +3,6 @@ package com.syncftp
 import android.Manifest
 import android.content.ContentValues
 import android.content.pm.PackageManager
-import android.graphics.BitmapFactory
-import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -25,11 +23,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.mishin.syncftp.FtpUploader
 import com.mishin.syncftp.SftpUploader
-import kotlinx.coroutines.Dispatchers
+import com.mishin.syncftp.UploadHistoryItem
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
 
@@ -47,6 +43,9 @@ fun CameraScreen(
     var statusMessage by remember { mutableStateOf("Готов к съёмке") }
     var isUploading by remember { mutableStateOf(false) }
     var settings by remember { mutableStateOf<CameraSettings?>(null) }
+
+    // Для PreviewView
+    var previewView by remember { mutableStateOf<PreviewView?>(null) }
 
     // Load settings
     LaunchedEffect(Unit) {
@@ -78,11 +77,16 @@ fun CameraScreen(
     }
 
     // Camera setup
-    DisposableEffect(lifecycleOwner) {
+    LaunchedEffect(Unit) {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
         cameraProviderFuture.addListener({
             val cameraProvider = cameraProviderFuture.get()
-            val preview = Preview.Builder().build()
+
+            // Create preview use case
+            val preview = Preview.Builder().build().also {
+                it.setSurfaceProvider(previewView?.surfaceProvider)
+            }
+
             imageCapture = ImageCapture.Builder()
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
                 .build()
@@ -100,10 +104,6 @@ fun CameraScreen(
                 statusMessage = "Ошибка камеры: ${e.message}"
             }
         }, ContextCompat.getMainExecutor(context))
-
-        onDispose {
-            ProcessCameraProvider.getInstance(context).get().unbindAll()
-        }
     }
 
     Column(
@@ -115,6 +115,7 @@ fun CameraScreen(
             factory = { ctx ->
                 PreviewView(ctx).apply {
                     implementationMode = PreviewView.ImplementationMode.PERFORMANCE
+                    previewView = this
                 }
             },
             modifier = Modifier
@@ -168,8 +169,8 @@ fun CameraScreen(
                         return@Button
                     }
 
-                    val imageCapture = imageCapture
-                    if (imageCapture == null) {
+                    val capture = imageCapture
+                    if (capture == null) {
                         statusMessage = "Камера не готова"
                         return@Button
                     }
@@ -180,51 +181,25 @@ fun CameraScreen(
                     val fileName = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault())
                         .format(Date()) + ".jpg"
 
-                    val contentValues = ContentValues().apply {
-                        put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
-                        put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_PICTURES}/SyncFTP")
-                        }
-                    }
+                    // Создаём временный файл для фото
+                    val photoFile = File(context.cacheDir, fileName)
+                    val outputOptions = ImageCapture.OutputFileOptions.Builder(photoFile).build()
 
-                    val outputOptions = ImageCapture.OutputFileOptions.Builder(
-                        context.contentResolver,
-                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                        contentValues
-                    ).build()
-
-                    imageCapture.takePicture(
+                    capture.takePicture(
                         outputOptions,
                         ContextCompat.getMainExecutor(context),
                         object : ImageCapture.OnImageSavedCallback {
                             override fun onImageSaved(output: ImageCapture.OutputFileResults) {
                                 scope.launch {
-                                    val savedUri = output.savedUri
-                                    if (savedUri == null) {
-                                        statusMessage = "Ошибка: не удалось сохранить фото"
-                                        isUploading = false
-                                        return@launch
-                                    }
                                     statusMessage = "Сжатие фото..."
 
-                                    // Get file from URI
-                                    val inputStream = context.contentResolver.openInputStream(savedUri)
-                                    val tempFile = File(context.cacheDir, "temp_$fileName")
-                                    inputStream?.use { input ->
-                                        tempFile.outputStream().use { output ->
-                                            input.copyTo(output)
-                                        }
-                                    }
-                                    inputStream?.close()
-
-                                    val compressedFile = File(context.cacheDir, fileName)
+                                    val compressedFile = File(context.cacheDir, "compressed_$fileName")
                                     val compressionSuccess = ImageCompressor.compressImage(
-                                        tempFile.absolutePath,
+                                        photoFile.absolutePath,
                                         compressedFile
                                     )
 
-                                    tempFile.delete()
+                                    photoFile.delete()
 
                                     if (!compressionSuccess) {
                                         statusMessage = "Ошибка сжатия"
@@ -256,6 +231,16 @@ fun CameraScreen(
                                     compressedFile.delete()
                                     isUploading = false
                                 }
+
+                                // После успешной отправки добавить в историю
+                                val historyItem = UploadHistoryItem(
+                                    fileName = fileName,
+                                    fileSize = compressedFile.length(),
+                                    uploadDate = System.currentTimeMillis(),
+                                    status = "✅ Успешно",
+                                    remotePath = "${settings!!.serverFolder}$fileName"
+                                )
+                                settingsDataStore.addToHistory(historyItem)
                             }
 
                             override fun onError(exception: ImageCaptureException) {

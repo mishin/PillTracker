@@ -9,15 +9,16 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.core.content.ContextCompat
 import com.mishin.syncftp.ui.theme.SyncFTPTheme
-import com.syncftp.CameraScreen
-import com.syncftp.SettingsDataStore
+import com.syncftp.*
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var settingsDataStore: SettingsDataStore
     val showCamera = mutableStateOf(false)
+    val showHistory = mutableStateOf(false)
     val currentPhotoPath = mutableStateOf<String?>(null)
 
     private val requestPermissionLauncher = registerForActivityResult(
@@ -37,21 +38,31 @@ class MainActivity : ComponentActivity() {
 
         setContent {
             SyncFTPTheme {
-                if (showCamera.value) {
-                    CameraScreen(
-                        settingsDataStore = settingsDataStore,
-                        onPhotoTaken = { photoPath ->
-                            currentPhotoPath.value = photoPath
-                            showCamera.value = false
-                        },
-                        onBack = { showCamera.value = false }
-                    )
-                } else {
-                    SettingsScreen(
-                        settingsDataStore = settingsDataStore,
-                        onOpenCamera = { showCamera.value = true },
-                        photoPath = currentPhotoPath.value
-                    )
+                when {
+                    showCamera.value -> {
+                        CameraScreen(
+                            settingsDataStore = settingsDataStore,
+                            onPhotoTaken = { photoPath ->
+                                currentPhotoPath.value = photoPath
+                                showCamera.value = false
+                            },
+                            onBack = { showCamera.value = false }
+                        )
+                    }
+                    showHistory.value -> {
+                        HistoryScreen(
+                            settingsDataStore = settingsDataStore,
+                            onBack = { showHistory.value = false }
+                        )
+                    }
+                    else -> {
+                        SettingsScreen(
+                            settingsDataStore = settingsDataStore,
+                            onOpenCamera = { showCamera.value = true },
+                            photoPath = currentPhotoPath.value,
+                            onOpenHistory = { showHistory.value = true }
+                        )
+                    }
                 }
             }
         }
