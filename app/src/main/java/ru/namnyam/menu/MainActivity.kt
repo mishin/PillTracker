@@ -555,7 +555,7 @@ fun OrderMenuScreen() {
                                     modifier = Modifier.clickable { isFilterExpanded = !isFilterExpanded }
                                 ) {
                                     Icon(
-                                        imageVector = if (excludeFilterText.isNotEmpty()) Icons.Default.FilterAlt else Icons.Default.FilterAltOutlined,
+                                        imageVector = if (excludeFilterText.isNotEmpty()) Icons.Default.FilterList else Icons.Default.FilterList,
                                         contentDescription = null,
                                         tint = Color(0xFF2E7D32),
                                         modifier = Modifier.size(20.dp)
