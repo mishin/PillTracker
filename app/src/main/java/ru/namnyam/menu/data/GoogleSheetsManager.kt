@@ -68,7 +68,7 @@ object GoogleSheetsManager {
             AppLogger.log(context, "GET_SHEETS", "Листы получены (${list.size}): ${list.map { it.title }}")
             list
         } catch (e: Exception) {
-            AppLogger.log(context, "GET_SHEETS_ERROR", "Ошибка доступа к таблице '$spreadsheetId': ${e.message}\nУбедитесь, что таблица расшарена для $SERVICE_ACCOUNT_EMAIL", e)
+            AppLogger.log(context, "GET_SHEETS_ERROR", "Ошибка доступа к таблице '$spreadsheetId': ${e.message}", e)
             emptyList()
         }
     }
@@ -81,7 +81,6 @@ object GoogleSheetsManager {
     ): DayMenuResult = withContext(Dispatchers.IO) {
         val service = sheetsService ?: return@withContext DayMenuResult()
 
-        // Запуск парсера картинок с сайта
         NamNyamScraper.fetchMenuImages(context)
 
         val empColLetter = getColumnLetter(employeeNumber + 2)
@@ -97,7 +96,7 @@ object GoogleSheetsManager {
             val initialOrders = mutableMapOf<Int, Int>()
 
             var dateHeader = ""
-            for (i in 0..minOf(3, rows.size - 1)) {
+            for (i in 0..minOf(4, rows.size - 1)) {
                 val rowStr = rows[i].joinToString(" ")
                 if (rowStr.contains("2026") || rowStr.contains("октября") || rowStr.contains("ноября")) {
                     dateHeader = rowStr.trim()
@@ -117,10 +116,12 @@ object GoogleSheetsManager {
                 if (name.isNotEmpty()) {
                     val price = priceRaw.toDoubleOrNull()
                     if (price == null || price == 0.0) {
+                        // Строка заголовка категории
                         if (!name.equals("Наименование", ignoreCase = true) && !name.equals("ИТОГО:", ignoreCase = true)) {
                             currentCategory = name
                         }
                     } else {
+                        // Поиск картинки
                         val realImageUrl = NamNyamScraper.findImageForDish(name) ?: resolveFallbackImage(name, currentCategory)
 
                         dishes.add(
@@ -142,7 +143,7 @@ object GoogleSheetsManager {
                 }
             }
 
-            AppLogger.log(context, "LOAD_MENU", "Загружено блюд: ${dishes.size}, текущих заказов сотрудника №$employeeNumber: ${initialOrders.size}")
+            AppLogger.log(context, "LOAD_MENU", "Загружено блюд: ${dishes.size}, текущих заказов: ${initialOrders.size}")
 
             DayMenuResult(
                 dateHeader = dateHeader,
@@ -155,7 +156,7 @@ object GoogleSheetsManager {
         }
     }
 
-    // Сохранение заказа сотрудника ОДНИМ ПАКЕТНЫМ ЗАПРОСОМ (Batch Update)
+    // Сохранение заказа: обновляет ТОЛЬКО строки блюд, НЕ затирая промежуточные строки с номерами сотрудников!
     suspend fun submitOrder(
         context: Context,
         spreadsheetId: String,
@@ -171,38 +172,38 @@ object GoogleSheetsManager {
         }
 
         val colLetter = getColumnLetter(employeeNumber + 2)
-        val minRow = allDishes.minOf { it.rowIndex }
-        val maxRow = allDishes.maxOf { it.rowIndex }
 
         try {
-            // Формируем вертикальный массив ячеек с minRow до maxRow
-            val columnValues = mutableListOf<List<Any>>()
-            for (row in minRow..maxRow) {
-                val qty = currentQuantities[row] ?: 0
-                val cellVal = if (qty > 0) qty else ""
-                columnValues.add(listOf(cellVal))
-            }
+            // Формируем точечные диапазоны ТОЛЬКО для строк блюд!
+            // Заголовки разделов и строки номеров сотрудников (1..35) не затрагиваются!
+            val valueRanges = mutableListOf<ValueRange>()
 
-            val rangeToUpdate = "'$sheetTitle'!$colLetter$minRow:$colLetter$maxRow"
-            val valueRange = ValueRange()
-                .setRange(rangeToUpdate)
-                .setValues(columnValues)
+            for (dish in allDishes) {
+                val qty = currentQuantities[dish.rowIndex] ?: 0
+                val cellVal = if (qty > 0) qty else ""
+                val cellRange = "'$sheetTitle'!$colLetter${dish.rowIndex}"
+                valueRanges.add(
+                    ValueRange()
+                        .setRange(cellRange)
+                        .setValues(listOf(listOf(cellVal)))
+                )
+            }
 
             val batchRequest = BatchUpdateValuesRequest()
                 .setValueInputOption("USER_ENTERED")
-                .setData(listOf(valueRange))
+                .setData(valueRanges)
 
-            // Выполняем РОВНО 1 сетевой запрос вместо 133!
+            // Отправляем все точечные ячейки одним пакетным запросом
             service.spreadsheets().values()
                 .batchUpdate(spreadsheetId, batchRequest)
                 .execute()
 
-            val msg = "Успешно записано в колонку $colLetter ($rangeToUpdate)"
+            val msg = "Успешно записано в колонку $colLetter (строк: ${valueRanges.size})"
             AppLogger.log(context, "SUBMIT_OK", msg)
             Pair(true, msg)
         } catch (e: Exception) {
             val msg = "Ошибка: ${e.message}"
-            AppLogger.log(context, "SUBMIT_FAIL", "Сбой batchUpdate в '$spreadsheetId' (лист '$sheetTitle'): ${e.message}", e)
+            AppLogger.log(context, "SUBMIT_FAIL", "Сбой batchUpdate: ${e.message}", e)
             Pair(false, msg)
         }
     }

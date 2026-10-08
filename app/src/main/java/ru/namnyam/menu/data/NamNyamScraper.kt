@@ -10,94 +10,90 @@ object NamNyamScraper {
     private const val MENU_URL = "https://www.nam-nyam.ru/menu-na-nedelu/"
     private const val BASE_URL = "https://www.nam-nyam.ru"
 
-    private val imageMap = mutableMapOf<String, String>()
+    private val exactDishImages = mutableMapOf<String, String>()
     private var isScraped = false
 
     suspend fun fetchMenuImages(context: Context): Map<String, String> = withContext(Dispatchers.IO) {
-        if (isScraped && imageMap.isNotEmpty()) {
-            return@withContext imageMap
+        if (isScraped && exactDishImages.isNotEmpty()) {
+            return@withContext exactDishImages
         }
 
         try {
-            AppLogger.log(context, "SCRAPER", "Парсинг каталога и картинок с $MENU_URL")
+            AppLogger.log(context, "SCRAPER", "Парсинг точных изображений блюд с $MENU_URL...")
             val doc = Jsoup.connect(MENU_URL)
                 .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36")
                 .timeout(20000)
                 .get()
 
-            // 1. Парсинг карточек товаров Битрикс (прямая связь заголовка и картинки)
-            val elements = doc.select("a[href*='/catalog/'], div[class*='item'], div[class*='product'], tr[class*='item']")
-            for (elem in elements) {
-                val titleElem = elem.select(".name, .title, a[title], h3, h4, span[class*='title']").firstOrNull()
-                val imgElem = elem.select("img").firstOrNull()
+            // 1. Парсинг конкретных блоков блюд по атрибутам карточек каталога
+            val productBlocks = doc.select(".menu-item, .catalog-item, div[class*='product'], div[class*='item'], tr[class*='menu']")
+            for (block in productBlocks) {
+                val title = block.select(".name, .title, a[title], h3, h4").text().ifEmpty {
+                    block.select("img").attr("alt")
+                }.trim()
 
-                val title = (titleElem?.attr("title")?.ifEmpty { titleElem.text() } ?: imgElem?.attr("alt") ?: imgElem?.attr("title") ?: "").trim()
-                var src = imgElem?.attr("src")?.ifEmpty { imgElem.attr("data-src") }?.ifEmpty { imgElem.attr("data-original") } ?: ""
+                var imgUrl = block.select("img").attr("src").ifEmpty {
+                    block.select("img").attr("data-src")
+                }
 
-                if (title.isNotEmpty() && src.isNotEmpty()) {
-                    if (src.startsWith("/")) {
-                        src = BASE_URL + src
+                if (title.isNotEmpty() && imgUrl.isNotEmpty()) {
+                    if (imgUrl.startsWith("/")) {
+                        imgUrl = BASE_URL + imgUrl
                     }
-                    if (!src.contains("logo") && !src.contains("icon")) {
-                        imageMap[cleanText(title)] = src
+                    if (!imgUrl.contains("logo") && !imgUrl.contains("no-photo")) {
+                        exactDishImages[normalizeKey(title)] = imgUrl
                     }
                 }
             }
 
-            // 2. Дополнительный проход по всем тегам img
-            val allImgs = doc.select("img")
-            for (img in allImgs) {
+            // 2. Парсинг всех изображений с валидным alt
+            val images = doc.select("img[src*='/upload/']")
+            for (img in images) {
                 val alt = (img.attr("alt").ifEmpty { img.attr("title") }).trim()
                 var src = img.attr("src").ifEmpty { img.attr("data-src") }
-                if (alt.length > 3 && src.isNotEmpty() && !src.contains("logo") && !src.contains("icon")) {
+                if (alt.length > 3 && src.isNotEmpty()) {
                     if (src.startsWith("/")) {
                         src = BASE_URL + src
                     }
-                    imageMap[cleanText(alt)] = src
+                    if (!src.contains("logo") && !src.contains("banner")) {
+                        exactDishImages[normalizeKey(alt)] = src
+                    }
                 }
             }
 
             isScraped = true
-            AppLogger.log(context, "SCRAPER", "Готово! Собрано оригинальных изображений: ${imageMap.size}")
+            AppLogger.log(context, "SCRAPER", "Найдено уникальных картинок блюд: ${exactDishImages.size}")
         } catch (e: Exception) {
-            AppLogger.log(context, "SCRAPER_ERROR", "Сбой граббинга: ${e.message}", e)
+            AppLogger.log(context, "SCRAPER_ERROR", "Ошибка парсинга: ${e.message}", e)
         }
 
-        return@withContext imageMap
+        return@withContext exactDishImages
     }
 
-    // Поиск лучшего соответствия для блюда из Google Таблицы
     fun findImageForDish(dishName: String): String? {
-        val target = cleanText(dishName)
+        val target = normalizeKey(dishName)
 
         // Точное совпадение
-        imageMap[target]?.let { return it }
+        exactDishImages[target]?.let { return it }
 
-        // Совпадение по вхождению подстроки
-        for ((name, url) in imageMap) {
-            if (name.length > 4 && (target.contains(name) || name.contains(target))) {
+        // Совпадение без граммовки и кавычек
+        val simpleTarget = target.replace(Regex("""\d+"""), "").trim()
+        for ((key, url) in exactDishImages) {
+            val simpleKey = key.replace(Regex("""\d+"""), "").trim()
+            if (simpleTarget == simpleKey || target.contains(key) || key.contains(target)) {
                 return url
-            }
-        }
-
-        // Совпадение по первым 2 ключевым словам (например "винегрет овощной")
-        val keywords = target.split(" ").filter { it.length > 2 }
-        if (keywords.isNotEmpty()) {
-            val firstWord = keywords[0]
-            for ((name, url) in imageMap) {
-                if (name.startsWith(firstWord)) {
-                    return url
-                }
             }
         }
 
         return null
     }
 
-    private fun cleanText(text: String): String {
+    private fun normalizeKey(text: String): String {
         return text.lowercase()
             .replace(Regex("""\b\d+\s*(г|гр|мл|шт)?\b"""), "")
-            .replace(Regex("""[«»"'\(\)]"""), "")
+            .replace("\"", "")
+            .replace("«", "")
+            .replace("»", "")
             .replace(Regex("""\s+"""), " ")
             .trim()
     }
