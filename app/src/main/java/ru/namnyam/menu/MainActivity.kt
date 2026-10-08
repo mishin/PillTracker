@@ -1,10 +1,14 @@
 package ru.namnyam.menu
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -29,18 +33,34 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.core.content.ContextCompat
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import kotlinx.coroutines.launch
 import ru.namnyam.menu.data.AppLogger
 import ru.namnyam.menu.data.DishItem
 import ru.namnyam.menu.data.GoogleSheetsManager
+import ru.namnyam.menu.data.OrderStorage
+import ru.namnyam.menu.data.ReminderManager
 import ru.namnyam.menu.data.SheetInfo
 
 class MainActivity : ComponentActivity() {
+
+    private val requestNotificationPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { _ -> }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         GoogleSheetsManager.initCredentials(applicationContext)
+
+        // Запуск ежедневного напоминания в 10:30 утра
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        ReminderManager.scheduleDailyReminder(applicationContext, 10, 30)
 
         setContent {
             MaterialTheme(
@@ -81,10 +101,11 @@ fun OrderMenuScreen() {
     val orderState = remember { mutableStateMapOf<Int, Int>() }
     val collapsedCategories = remember { mutableStateMapOf<String, Boolean>() }
 
-    // Состояния прямого поиска блюд и фильтра исключения ингредиентов
+    // Состояния фильтрации и режимов просмотра
     var searchQuery by remember { mutableStateOf("") }
     var excludeFilterText by remember { mutableStateOf("") }
     var isExcludeFilterExpanded by remember { mutableStateOf(false) }
+    var showOnlyOrdered by remember { mutableStateOf(false) }
     var selectedDishForDetails by remember { mutableStateOf<DishItem?>(null) }
 
     var isLoading by remember { mutableStateOf(false) }
@@ -94,6 +115,7 @@ fun OrderMenuScreen() {
     var logContent by remember { mutableStateOf("") }
 
     val totalSum = dishes.sumOf { (orderState[it.rowIndex] ?: 0) * it.price }
+    val totalCount = dishes.sumOf { orderState[it.rowIndex] ?: 0 }
     val budgetLimit = 600.0
 
     // Загрузка доступных листов из Google Таблицы
@@ -107,20 +129,32 @@ fun OrderMenuScreen() {
         isLoading = false
     }
 
-    // Загрузка блюд и ранее проставленных заказов выбранного дня
+    // Загрузка блюд (Сначала мгновенно из кэша, затем обновление по сети)
     LaunchedEffect(selectedSheetTitle, employeeNumber) {
         if (selectedSheetTitle.isNotEmpty()) {
-            isLoading = true
+            // 1. Мгновенное отображение из кэша
+            val cached = OrderStorage.loadMenuCache(context, selectedSheetTitle)
+            if (cached != null && cached.dishes.isNotEmpty()) {
+                dishes = cached.dishes
+                dateHeader = cached.dateHeader
+                orderState.clear()
+                orderState.putAll(cached.existingOrders)
+            }
+
+            // 2. Запрос актуальных данных из сети
+            isLoading = dishes.isEmpty()
             val result = GoogleSheetsManager.loadMenuAndCurrentOrder(context, spreadsheetId, selectedSheetTitle, employeeNumber)
-            dishes = result.dishes
-            dateHeader = result.dateHeader
-            orderState.clear()
-            orderState.putAll(result.existingOrders)
+            if (result.dishes.isNotEmpty()) {
+                dishes = result.dishes
+                dateHeader = result.dateHeader
+                orderState.clear()
+                orderState.putAll(result.existingOrders)
+                OrderStorage.saveMenuCache(context, selectedSheetTitle, result)
+            }
             isLoading = false
         }
     }
 
-    // Читаемая дата для заголовка
     val formattedDayDate = remember(selectedSheetTitle, dateHeader) {
         if (dateHeader.isNotEmpty()) {
             dateHeader
@@ -134,12 +168,16 @@ fun OrderMenuScreen() {
         }
     }
 
-    // Комплексная фильтрация: прямой поиск названия + исключение нежелательных ингредиентов
-    val filteredDishes = remember(dishes, searchQuery, excludeFilterText) {
+    // Фильтрация: Поиск + Исключение ингредиентов + Режим "Только мой заказ"
+    val filteredDishes = remember(dishes, searchQuery, excludeFilterText, showOnlyOrdered, orderState.toMap()) {
         val query = searchQuery.trim().lowercase()
         val exclude = excludeFilterText.trim().lowercase()
 
         dishes.filter { dish ->
+            val count = orderState[dish.rowIndex] ?: 0
+            if (showOnlyOrdered && count == 0) {
+                return@filter false
+            }
             val matchesQuery = query.isEmpty() || dish.name.lowercase().contains(query)
             val notExcluded = exclude.isEmpty() || (
                 !dish.name.lowercase().contains(exclude) &&
@@ -149,7 +187,7 @@ fun OrderMenuScreen() {
         }
     }
 
-    // Модальная карточка блюда (крупное фото, состав, КБЖУ, цена)
+    // Диалог просмотра деталей блюда
     selectedDishForDetails?.let { dish ->
         Dialog(onDismissRequest = { selectedDishForDetails = null }) {
             Card(
@@ -179,11 +217,7 @@ fun OrderMenuScreen() {
                             modifier = Modifier.weight(1f)
                         )
                         IconButton(onClick = { selectedDishForDetails = null }) {
-                            Icon(
-                                Icons.Default.Close,
-                                contentDescription = "Закрыть",
-                                tint = Color(0xFF7CB342)
-                            )
+                            Icon(Icons.Default.Close, contentDescription = "Закрыть", tint = Color(0xFF7CB342))
                         }
                     }
 
@@ -206,39 +240,19 @@ fun OrderMenuScreen() {
                     Spacer(modifier = Modifier.height(14.dp))
 
                     if (dish.composition.isNotEmpty()) {
-                        Text(
-                            text = "Состав: ${dish.composition}",
-                            fontSize = 13.sp,
-                            color = Color(0xFF558B2F),
-                            lineHeight = 18.sp
-                        )
+                        Text(text = "Состав: ${dish.composition}", fontSize = 13.sp, color = Color(0xFF558B2F), lineHeight = 18.sp)
                         Spacer(modifier = Modifier.height(8.dp))
                     }
-
                     if (dish.minerals.isNotEmpty()) {
-                        Text(
-                            text = "Макро и микроэлементы: ${dish.minerals}",
-                            fontSize = 13.sp,
-                            color = Color(0xFF689F38)
-                        )
+                        Text(text = "Макро и микроэлементы: ${dish.minerals}", fontSize = 13.sp, color = Color(0xFF689F38))
                         Spacer(modifier = Modifier.height(8.dp))
                     }
-
                     if (dish.vitamins.isNotEmpty()) {
-                        Text(
-                            text = "Витамины: ${dish.vitamins}",
-                            fontSize = 13.sp,
-                            color = Color(0xFF689F38)
-                        )
+                        Text(text = "Витамины: ${dish.vitamins}", fontSize = 13.sp, color = Color(0xFF689F38))
                         Spacer(modifier = Modifier.height(8.dp))
                     }
-
                     if (dish.caloriesInfo.isNotEmpty()) {
-                        Text(
-                            text = "Энергетическая ценность: ${dish.caloriesInfo}",
-                            fontSize = 13.sp,
-                            color = Color(0xFF689F38)
-                        )
+                        Text(text = "Энергетическая ценность: ${dish.caloriesInfo}", fontSize = 13.sp, color = Color(0xFF689F38))
                         Spacer(modifier = Modifier.height(14.dp))
                     }
 
@@ -247,13 +261,7 @@ fun OrderMenuScreen() {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "${dish.price.toInt()} руб.",
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF689F38)
-                        )
-
+                        Text(text = "${dish.price.toInt()} руб.", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color(0xFF689F38))
                         val currentCount = orderState[dish.rowIndex] ?: 0
                         OutlinedButton(
                             onClick = {
@@ -284,12 +292,7 @@ fun OrderMenuScreen() {
             },
             text = {
                 Column(modifier = Modifier.fillMaxWidth()) {
-                    Text(
-                        "Аккаунт: ${GoogleSheetsManager.SERVICE_ACCOUNT_EMAIL}",
-                        fontSize = 11.sp,
-                        color = Color.Gray,
-                        fontWeight = FontWeight.Bold
-                    )
+                    Text("Аккаунт: ${GoogleSheetsManager.SERVICE_ACCOUNT_EMAIL}", fontSize = 11.sp, color = Color.Gray, fontWeight = FontWeight.Bold)
                     Spacer(modifier = Modifier.height(6.dp))
                     Box(
                         modifier = Modifier
@@ -299,19 +302,12 @@ fun OrderMenuScreen() {
                             .padding(8.dp)
                             .verticalScroll(rememberScrollState())
                     ) {
-                        Text(
-                            text = logContent.ifEmpty { "Записей в логе нет." },
-                            color = Color(0xFF4AF626),
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 11.sp
-                        )
+                        Text(text = logContent.ifEmpty { "Записей в логе нет." }, color = Color(0xFF4AF626), fontFamily = FontFamily.Monospace, fontSize = 11.sp)
                     }
                 }
             },
             confirmButton = {
-                Button(onClick = {
-                    AppLogger.shareLogFile(context)
-                }) {
+                Button(onClick = { AppLogger.shareLogFile(context) }) {
                     Icon(Icons.Default.Share, null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(6.dp))
                     Text("Скачать / Поделиться")
@@ -338,12 +334,7 @@ fun OrderMenuScreen() {
                 Column {
                     Text("Вставьте ссылку на Google Таблицу:", fontSize = 13.sp)
                     Spacer(modifier = Modifier.height(8.dp))
-                    OutlinedTextField(
-                        value = tempUrl,
-                        onValueChange = { tempUrl = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        maxLines = 3
-                    )
+                    OutlinedTextField(value = tempUrl, onValueChange = { tempUrl = it }, modifier = Modifier.fillMaxWidth(), maxLines = 3)
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         "⚠️ Важно: Добавьте почту сервисного аккаунта в доступ таблицы (как Редактора):\n${GoogleSheetsManager.SERVICE_ACCOUNT_EMAIL}",
@@ -362,9 +353,7 @@ fun OrderMenuScreen() {
                     Text("Сохранить")
                 }
             },
-            dismissButton = {
-                TextButton(onClick = { showSettingsDialog = false }) { Text("Отмена") }
-            }
+            dismissButton = { TextButton(onClick = { showSettingsDialog = false }) { Text("Отмена") } }
         )
     }
 
@@ -433,6 +422,8 @@ fun OrderMenuScreen() {
                                     )
                                     isLoading = false
                                     if (success) {
+                                        // Сохраняем заказ в историю для повтора в 1 клик
+                                        OrderStorage.saveOrderTemplate(context, employeeNumber, selectedSheetTitle, orderState)
                                         Toast.makeText(context, "✅ Заказ сохранен в таблице!", Toast.LENGTH_SHORT).show()
                                     } else {
                                         Toast.makeText(context, "❌ $message (см. Лог 📝)", Toast.LENGTH_LONG).show()
@@ -495,25 +486,9 @@ fun OrderMenuScreen() {
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
 
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text("Дата меню:", fontSize = 12.sp, color = Color.Gray)
-                        Text(
-                            formattedDayDate,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 13.sp,
-                            color = Color(0xFF2E7D32)
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    // Горизонтальный скролл для дней недели (ПН, ВТ, СР, ЧТ, ПТ)
+                    // Дни недели со скроллом
                     val daysScrollState = rememberScrollState()
                     Row(
                         modifier = Modifier
@@ -539,9 +514,67 @@ fun OrderMenuScreen() {
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(8.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
 
-                    // ПРЯМОЙ ПОИСК БЛЮДА (например, "карбонара", "борщ")
+                    // Панель умных действий: Автоподбор комбо на 600р, Повтор прошлого заказа, Корзина
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        // 1. Показать только выбранное (Корзина)
+                        FilterChip(
+                            selected = showOnlyOrdered,
+                            onClick = { showOnlyOrdered = !showOnlyOrdered },
+                            leadingIcon = { Icon(Icons.Default.ShoppingCart, null, modifier = Modifier.size(16.dp)) },
+                            label = { Text("Мой заказ ($totalCount)") }
+                        )
+
+                        // 2. Автосборка комбо на 600р
+                        FilledTonalButton(
+                            onClick = {
+                                val combo = OrderStorage.generateBalancedCombo(dishes, budgetLimit)
+                                if (combo.isNotEmpty()) {
+                                    orderState.clear()
+                                    orderState.putAll(combo)
+                                    Toast.makeText(context, "✨ Собрано комбо из 3 блюд под лимит 600 ₽!", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "Не удалось скомпоновать блюда", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(Icons.Default.AutoFixHigh, null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Комбо на 600 ₽", fontSize = 12.sp)
+                        }
+
+                        // 3. Повторить заказ прошлой недели
+                        OutlinedButton(
+                            onClick = {
+                                val template = OrderStorage.loadOrderTemplate(context, employeeNumber, selectedSheetTitle)
+                                if (template != null && template.isNotEmpty()) {
+                                    orderState.clear()
+                                    orderState.putAll(template)
+                                    Toast.makeText(context, "🔄 Заказ успешно восстановлен из истории!", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    Toast.makeText(context, "История для этого дня пока пуста", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            shape = RoundedCornerShape(8.dp)
+                        ) {
+                            Icon(Icons.Default.History, null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Повторить заказ", fontSize = 12.sp)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // Прямой поиск названия блюда
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { searchQuery = it },
@@ -554,19 +587,15 @@ fun OrderMenuScreen() {
                         trailingIcon = {
                             if (searchQuery.isNotEmpty()) {
                                 IconButton(onClick = { searchQuery = "" }) {
-                                    Icon(Icons.Default.Clear, contentDescription = "Очистить поиск", modifier = Modifier.size(18.dp))
+                                    Icon(Icons.Default.Clear, contentDescription = "Очистить", modifier = Modifier.size(18.dp))
                                 }
                             }
-                        },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = Color(0xFF2E7D32),
-                            focusedLabelColor = Color(0xFF2E7D32)
-                        )
+                        }
                     )
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // Блок дополнительной фильтрации (исключение аллергенов) и счетчик
+                    // Фильтр исключения аллергенов и счетчик позиций
                     Surface(
                         shape = RoundedCornerShape(8.dp),
                         color = Color(0xFFF1F8E9),
@@ -582,22 +611,16 @@ fun OrderMenuScreen() {
                                     verticalAlignment = Alignment.CenterVertically,
                                     modifier = Modifier.clickable { isExcludeFilterExpanded = !isExcludeFilterExpanded }
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Default.FilterList,
-                                        contentDescription = null,
-                                        tint = Color(0xFF2E7D32),
-                                        modifier = Modifier.size(18.dp)
-                                    )
+                                    Icon(Icons.Default.FilterList, null, tint = Color(0xFF2E7D32), modifier = Modifier.size(18.dp))
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = if (isExcludeFilterExpanded) "Скрыть исключения" else "Исключить ингредиенты...",
+                                        text = if (isExcludeFilterExpanded) "Скрыть аллергены" else "Исключить ингредиенты...",
                                         fontWeight = FontWeight.Medium,
                                         fontSize = 12.sp,
                                         color = Color(0xFF2E7D32)
                                     )
                                 }
 
-                                // Индикатор "Осталось X из Y блюд"
                                 Surface(
                                     shape = RoundedCornerShape(10.dp),
                                     color = if (filteredDishes.size < dishes.size) Color(0xFF2E7D32) else Color(0xFFE0E0E0)
@@ -612,7 +635,6 @@ fun OrderMenuScreen() {
                                 }
                             }
 
-                            // Выпадающая панель исключения продуктов
                             if (isExcludeFilterExpanded || excludeFilterText.isNotEmpty()) {
                                 Spacer(modifier = Modifier.height(6.dp))
                                 OutlinedTextField(
@@ -640,9 +662,7 @@ fun OrderMenuScreen() {
                                         val isSelected = excludeFilterText.equals(allergen, ignoreCase = true)
                                         FilterChip(
                                             selected = isSelected,
-                                            onClick = {
-                                                excludeFilterText = if (isSelected) "" else allergen
-                                            },
+                                            onClick = { excludeFilterText = if (isSelected) "" else allergen },
                                             label = { Text("Без $allergen", fontSize = 11.sp) }
                                         )
                                     }
@@ -673,9 +693,7 @@ fun OrderMenuScreen() {
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 8.dp, vertical = 4.dp)
-                                    .clickable {
-                                        collapsedCategories[category] = !isCollapsed
-                                    },
+                                    .clickable { collapsedCategories[category] = !isCollapsed },
                                 shape = RoundedCornerShape(8.dp),
                                 color = Color(0xFFE8F5E9)
                             ) {
@@ -689,18 +707,8 @@ fun OrderMenuScreen() {
                                         tint = Color(0xFF2E7D32)
                                     )
                                     Spacer(modifier = Modifier.width(8.dp))
-                                    Text(
-                                        category,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 14.sp,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    Text(
-                                        "${categoryDishes.size}",
-                                        fontSize = 12.sp,
-                                        color = Color.Gray,
-                                        modifier = Modifier.padding(end = 6.dp)
-                                    )
+                                    Text(category, fontWeight = FontWeight.Bold, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                                    Text("${categoryDishes.size}", fontSize = 12.sp, color = Color.Gray, modifier = Modifier.padding(end = 6.dp))
                                     if (categoryOrderedCount > 0) {
                                         Badge(containerColor = Color(0xFF2E7D32)) {
                                             Text("$categoryOrderedCount", color = Color.White)
@@ -739,9 +747,7 @@ fun OrderMenuScreen() {
                                                 .size(64.dp)
                                                 .clip(RoundedCornerShape(8.dp))
                                                 .background(Color(0xFFE0E0E0))
-                                                .clickable {
-                                                    selectedDishForDetails = dish
-                                                },
+                                                .clickable { selectedDishForDetails = dish },
                                             contentScale = ContentScale.Crop
                                         )
 
@@ -750,9 +756,7 @@ fun OrderMenuScreen() {
                                         Column(
                                             modifier = Modifier
                                                 .weight(1f)
-                                                .clickable {
-                                                    selectedDishForDetails = dish
-                                                }
+                                                .clickable { selectedDishForDetails = dish }
                                         ) {
                                             Text(dish.name, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                                             Text(

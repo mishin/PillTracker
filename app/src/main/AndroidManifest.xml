@@ -3,6 +3,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <application
         android:allowBackup="true"
@@ -23,7 +25,10 @@
             </intent-filter>
         </activity>
 
-        <!-- Провайдер для отправки файла логов через стандартное меню "Поделиться" -->
+        <receiver
+            android:name="ru.namnyam.menu.data.ReminderReceiver"
+            android:exported="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="ru.namnyam.menu.fileprovider"
