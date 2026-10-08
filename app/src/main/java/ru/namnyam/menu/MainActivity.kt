@@ -9,6 +9,11 @@ import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -54,7 +59,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         GoogleSheetsManager.initCredentials(applicationContext)
 
-        // Запуск ежедневного напоминания в 10:30 утра
+        // Запуск ежедневного напоминания в 10:30 утра[cite: 8]
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -101,12 +106,13 @@ fun OrderMenuScreen() {
     val orderState = remember { mutableStateMapOf<Int, Int>() }
     val collapsedCategories = remember { mutableStateMapOf<String, Boolean>() }
 
-    // Состояния фильтрации и режимов просмотра
+    // Состояния фильтрации и видимости блоков
+    var isFiltersVisible by remember { mutableStateOf(false) } // Показ/скрытие фильтров
     var searchQuery by remember { mutableStateOf("") }
     var excludeFilterText by remember { mutableStateOf("") }
-    var isExcludeFilterExpanded by remember { mutableStateOf(false) }
     var showOnlyOrdered by remember { mutableStateOf(false) }
     var selectedDishForDetails by remember { mutableStateOf<DishItem?>(null) }
+    var showClearConfirmDialog by remember { mutableStateOf(false) } // Подтверждение очистки
 
     var isLoading by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
@@ -117,8 +123,9 @@ fun OrderMenuScreen() {
     val totalSum = dishes.sumOf { (orderState[it.rowIndex] ?: 0) * it.price }
     val totalCount = dishes.sumOf { orderState[it.rowIndex] ?: 0 }
     val budgetLimit = 600.0
+    val budgetProgress = (totalSum / budgetLimit).toFloat().coerceIn(0f, 1f)
 
-    // Загрузка доступных листов из Google Таблицы
+    // Загрузка листов таблицы[cite: 8]
     LaunchedEffect(spreadsheetId) {
         isLoading = true
         val sheets = GoogleSheetsManager.getSheetTitles(context, spreadsheetId)
@@ -129,10 +136,9 @@ fun OrderMenuScreen() {
         isLoading = false
     }
 
-    // Загрузка блюд (Сначала мгновенно из кэша, затем обновление по сети)
+    // Загрузка меню (сначала локальный кэш, затем сеть)[cite: 8]
     LaunchedEffect(selectedSheetTitle, employeeNumber) {
         if (selectedSheetTitle.isNotEmpty()) {
-            // 1. Мгновенное отображение из кэша
             val cached = OrderStorage.loadMenuCache(context, selectedSheetTitle)
             if (cached != null && cached.dishes.isNotEmpty()) {
                 dishes = cached.dishes
@@ -141,7 +147,6 @@ fun OrderMenuScreen() {
                 orderState.putAll(cached.existingOrders)
             }
 
-            // 2. Запрос актуальных данных из сети
             isLoading = dishes.isEmpty()
             val result = GoogleSheetsManager.loadMenuAndCurrentOrder(context, spreadsheetId, selectedSheetTitle, employeeNumber)
             if (result.dishes.isNotEmpty()) {
@@ -168,7 +173,7 @@ fun OrderMenuScreen() {
         }
     }
 
-    // Фильтрация: Поиск + Исключение ингредиентов + Режим "Только мой заказ"
+    // Комплексная фильтрация[cite: 8]
     val filteredDishes = remember(dishes, searchQuery, excludeFilterText, showOnlyOrdered, orderState.toMap()) {
         val query = searchQuery.trim().lowercase()
         val exclude = excludeFilterText.trim().lowercase()
@@ -187,7 +192,33 @@ fun OrderMenuScreen() {
         }
     }
 
-    // Диалог просмотра деталей блюда
+    // Диалог подтверждения очистки заказа
+    if (showClearConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirmDialog = false },
+            title = { Text("Очистить текущий заказ?") },
+            text = { Text("Все выбранные блюда ($totalCount шт.) будут удалены из вашего выбора.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        orderState.clear()
+                        showClearConfirmDialog = false
+                        Toast.makeText(context, "Заказ очищен", Toast.LENGTH_SHORT).show()
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
+                ) {
+                    Text("Очистить")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirmDialog = false }) {
+                    Text("Отмена")
+                }
+            }
+        )
+    }
+
+    // Диалог подробностей блюда[cite: 8]
     selectedDishForDetails?.let { dish ->
         Dialog(onDismissRequest = { selectedDishForDetails = null }) {
             Card(
@@ -279,7 +310,7 @@ fun OrderMenuScreen() {
         }
     }
 
-    // Диалог системных логов
+    // Диалог логов[cite: 8]
     if (showLogDialog) {
         AlertDialog(
             onDismissRequest = { showLogDialog = false },
@@ -324,7 +355,7 @@ fun OrderMenuScreen() {
         )
     }
 
-    // Диалог настройки URL таблицы
+    // Диалог настроек таблицы[cite: 8]
     if (showSettingsDialog) {
         var tempUrl by remember { mutableStateOf(tableUrl) }
         AlertDialog(
@@ -388,7 +419,20 @@ fun OrderMenuScreen() {
         },
         bottomBar = {
             Surface(shadowElevation = 8.dp, color = Color.White) {
-                Column(modifier = Modifier.padding(14.dp)) {
+                Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
+                    // Индикатор прогресса бюджета
+                    LinearProgressIndicator(
+                        progress = budgetProgress,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(6.dp)
+                            .clip(RoundedCornerShape(3.dp)),
+                        color = if (totalSum > budgetLimit) Color.Red else Color(0xFF2E7D32),
+                        trackColor = Color(0xFFE0E0E0)
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -398,7 +442,7 @@ fun OrderMenuScreen() {
                             Text(
                                 text = "Итого: ${totalSum.toInt()} ₽ / ${budgetLimit.toInt()} ₽",
                                 fontWeight = FontWeight.Bold,
-                                fontSize = 18.sp,
+                                fontSize = 17.sp,
                                 color = if (totalSum > budgetLimit) Color.Red else Color(0xFF2E7D32)
                             )
                             Text(
@@ -408,34 +452,45 @@ fun OrderMenuScreen() {
                             )
                         }
 
-                        Button(
-                            onClick = {
-                                scope.launch {
-                                    isLoading = true
-                                    val (success, message) = GoogleSheetsManager.submitOrder(
-                                        context = context,
-                                        spreadsheetId = spreadsheetId,
-                                        sheetTitle = selectedSheetTitle,
-                                        employeeNumber = employeeNumber,
-                                        allDishes = dishes,
-                                        currentQuantities = orderState
-                                    )
-                                    isLoading = false
-                                    if (success) {
-                                        // Сохраняем заказ в историю для повтора в 1 клик
-                                        OrderStorage.saveOrderTemplate(context, employeeNumber, selectedSheetTitle, orderState)
-                                        Toast.makeText(context, "✅ Заказ сохранен в таблице!", Toast.LENGTH_SHORT).show()
-                                    } else {
-                                        Toast.makeText(context, "❌ $message (см. Лог 📝)", Toast.LENGTH_LONG).show()
-                                        logContent = AppLogger.readLog(context)
-                                        showLogDialog = true
-                                    }
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            // Кнопка быстрой очистки заказа
+                            if (totalCount > 0) {
+                                IconButton(
+                                    onClick = { showClearConfirmDialog = true },
+                                    modifier = Modifier.padding(end = 4.dp)
+                                ) {
+                                    Icon(Icons.Default.DeleteOutline, contentDescription = "Очистить заказ", tint = Color.Red)
                                 }
-                            },
-                            enabled = !isLoading,
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
-                        ) {
-                            Text("Сохранить в таблице")
+                            }
+
+                            Button(
+                                onClick = {
+                                    scope.launch {
+                                        isLoading = true
+                                        val (success, message) = GoogleSheetsManager.submitOrder(
+                                            context = context,
+                                            spreadsheetId = spreadsheetId,
+                                            sheetTitle = selectedSheetTitle,
+                                            employeeNumber = employeeNumber,
+                                            allDishes = dishes,
+                                            currentQuantities = orderState
+                                        )
+                                        isLoading = false
+                                        if (success) {
+                                            OrderStorage.saveOrderTemplate(context, employeeNumber, selectedSheetTitle, orderState)
+                                            Toast.makeText(context, "✅ Заказ сохранен в таблице!", Toast.LENGTH_SHORT).show()
+                                        } else {
+                                            Toast.makeText(context, "❌ $message (см. Лог 📝)", Toast.LENGTH_LONG).show()
+                                            logContent = AppLogger.readLog(context)
+                                            showLogDialog = true
+                                        }
+                                    }
+                                },
+                                enabled = !isLoading,
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+                            ) {
+                                Text("Сохранить")
+                            }
                         }
                     }
                 }
@@ -488,7 +543,7 @@ fun OrderMenuScreen() {
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    // Дни недели со скроллом
+                    // Дни недели со скроллом[cite: 8]
                     val daysScrollState = rememberScrollState()
                     Row(
                         modifier = Modifier
@@ -516,14 +571,33 @@ fun OrderMenuScreen() {
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // Панель умных действий: Автоподбор комбо на 600р, Повтор прошлого заказа, Корзина
+                    // Панель умных действий[cite: 8]
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        // 1. Показать только выбранное (Корзина)
+                        // Кнопка показа/скрытия фильтров
+                        FilterChip(
+                            selected = isFiltersVisible || searchQuery.isNotEmpty() || excludeFilterText.isNotEmpty(),
+                            onClick = { isFiltersVisible = !isFiltersVisible },
+                            leadingIcon = {
+                                Icon(
+                                    if (isFiltersVisible) Icons.Default.FilterAlt else Icons.Default.FilterList,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            },
+                            label = {
+                                Text(
+                                    if (isFiltersVisible) "Скрыть фильтры" else "Фильтры и поиск",
+                                    fontSize = 12.sp
+                                )
+                            }
+                        )
+
+                        // Показать только выбранное (Корзина)[cite: 8]
                         FilterChip(
                             selected = showOnlyOrdered,
                             onClick = { showOnlyOrdered = !showOnlyOrdered },
@@ -531,16 +605,16 @@ fun OrderMenuScreen() {
                             label = { Text("Мой заказ ($totalCount)") }
                         )
 
-                        // 2. Автосборка комбо на 600р
+                        // Автосборка комбо на 600р[cite: 8]
                         FilledTonalButton(
                             onClick = {
                                 val combo = OrderStorage.generateBalancedCombo(dishes, budgetLimit)
                                 if (combo.isNotEmpty()) {
                                     orderState.clear()
                                     orderState.putAll(combo)
-                                    Toast.makeText(context, "✨ Собрано комбо из 3 блюд под лимит 600 ₽!", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "✨ Собрано комбо на 600 ₽!", Toast.LENGTH_SHORT).show()
                                 } else {
-                                    Toast.makeText(context, "Не удалось скомпоновать блюда", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Не удалось собрать комбо", Toast.LENGTH_SHORT).show()
                                 }
                             },
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
@@ -551,16 +625,16 @@ fun OrderMenuScreen() {
                             Text("Комбо на 600 ₽", fontSize = 12.sp)
                         }
 
-                        // 3. Повторить заказ прошлой недели
+                        // Повторить заказ прошлой недели[cite: 8]
                         OutlinedButton(
                             onClick = {
                                 val template = OrderStorage.loadOrderTemplate(context, employeeNumber, selectedSheetTitle)
                                 if (template != null && template.isNotEmpty()) {
                                     orderState.clear()
                                     orderState.putAll(template)
-                                    Toast.makeText(context, "🔄 Заказ успешно восстановлен из истории!", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "🔄 Заказ восстановлен!", Toast.LENGTH_SHORT).show()
                                 } else {
-                                    Toast.makeText(context, "История для этого дня пока пуста", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "История для этого дня пуста", Toast.LENGTH_SHORT).show()
                                 }
                             },
                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
@@ -572,99 +646,98 @@ fun OrderMenuScreen() {
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    // Прямой поиск названия блюда
-                    OutlinedTextField(
-                        value = searchQuery,
-                        onValueChange = { searchQuery = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        placeholder = { Text("Поиск блюда (например: карбонара)", fontSize = 13.sp) },
-                        leadingIcon = {
-                            Icon(Icons.Default.Search, contentDescription = "Поиск", tint = Color(0xFF2E7D32), modifier = Modifier.size(20.dp))
-                        },
-                        trailingIcon = {
-                            if (searchQuery.isNotEmpty()) {
-                                IconButton(onClick = { searchQuery = "" }) {
-                                    Icon(Icons.Default.Clear, contentDescription = "Очистить", modifier = Modifier.size(18.dp))
-                                }
-                            }
-                        }
-                    )
-
-                    Spacer(modifier = Modifier.height(6.dp))
-
-                    // Фильтр исключения аллергенов и счетчик позиций
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = Color(0xFFF1F8E9),
-                        modifier = Modifier.fillMaxWidth()
+                    // Анимированный сворачиваемый блок фильтрации и поиска
+                    AnimatedVisibility(
+                        visible = isFiltersVisible,
+                        enter = fadeIn() + expandVertically(),
+                        exit = fadeOut() + shrinkVertically()
                     ) {
-                        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
-                            Row(
+                        Column(modifier = Modifier.padding(top = 8.dp)) {
+                            // Прямой поиск названия блюда[cite: 8]
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.clickable { isExcludeFilterExpanded = !isExcludeFilterExpanded }
-                                ) {
-                                    Icon(Icons.Default.FilterList, null, tint = Color(0xFF2E7D32), modifier = Modifier.size(18.dp))
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = if (isExcludeFilterExpanded) "Скрыть аллергены" else "Исключить ингредиенты...",
-                                        fontWeight = FontWeight.Medium,
-                                        fontSize = 12.sp,
-                                        color = Color(0xFF2E7D32)
-                                    )
-                                }
-
-                                Surface(
-                                    shape = RoundedCornerShape(10.dp),
-                                    color = if (filteredDishes.size < dishes.size) Color(0xFF2E7D32) else Color(0xFFE0E0E0)
-                                ) {
-                                    Text(
-                                        text = "${filteredDishes.size} из ${dishes.size}",
-                                        fontSize = 11.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = if (filteredDishes.size < dishes.size) Color.White else Color(0xFF424242),
-                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                                    )
-                                }
-                            }
-
-                            if (isExcludeFilterExpanded || excludeFilterText.isNotEmpty()) {
-                                Spacer(modifier = Modifier.height(6.dp))
-                                OutlinedTextField(
-                                    value = excludeFilterText,
-                                    onValueChange = { excludeFilterText = it },
-                                    modifier = Modifier.fillMaxWidth(),
-                                    singleLine = true,
-                                    placeholder = { Text("Исключить продукт (например: лук)", fontSize = 12.sp) },
-                                    trailingIcon = {
-                                        if (excludeFilterText.isNotEmpty()) {
-                                            IconButton(onClick = { excludeFilterText = "" }) {
-                                                Icon(Icons.Default.Clear, contentDescription = "Сброс", modifier = Modifier.size(16.dp))
-                                            }
+                                singleLine = true,
+                                placeholder = { Text("Поиск блюда (например: карбонара)", fontSize = 13.sp) },
+                                leadingIcon = {
+                                    Icon(Icons.Default.Search, contentDescription = "Поиск", tint = Color(0xFF2E7D32), modifier = Modifier.size(20.dp))
+                                },
+                                trailingIcon = {
+                                    if (searchQuery.isNotEmpty()) {
+                                        IconButton(onClick = { searchQuery = "" }) {
+                                            Icon(Icons.Default.Clear, contentDescription = "Очистить", modifier = Modifier.size(18.dp))
                                         }
                                     }
-                                )
+                                }
+                            )
 
-                                Spacer(modifier = Modifier.height(4.dp))
+                            Spacer(modifier = Modifier.height(6.dp))
 
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                    modifier = Modifier.horizontalScroll(rememberScrollState())
-                                ) {
-                                    listOf("лук", "чеснок", "перец", "мясо").forEach { allergen ->
-                                        val isSelected = excludeFilterText.equals(allergen, ignoreCase = true)
-                                        FilterChip(
-                                            selected = isSelected,
-                                            onClick = { excludeFilterText = if (isSelected) "" else allergen },
-                                            label = { Text("Без $allergen", fontSize = 11.sp) }
+                            // Исключение ингредиентов и аллергенов
+                            Surface(
+                                shape = RoundedCornerShape(8.dp),
+                                color = Color(0xFFF1F8E9),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(modifier = Modifier.padding(8.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Исключить аллергены:",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            color = Color(0xFF2E7D32)
                                         )
+
+                                        Surface(
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = if (filteredDishes.size < dishes.size) Color(0xFF2E7D32) else Color(0xFFE0E0E0)
+                                        ) {
+                                            Text(
+                                                text = "${filteredDishes.size} из ${dishes.size}",
+                                                fontSize = 11.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (filteredDishes.size < dishes.size) Color.White else Color(0xFF424242),
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+
+                                    OutlinedTextField(
+                                        value = excludeFilterText,
+                                        onValueChange = { excludeFilterText = it },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true,
+                                        placeholder = { Text("Исключить продукт (например: лук)", fontSize = 12.sp) },
+                                        trailingIcon = {
+                                            if (excludeFilterText.isNotEmpty()) {
+                                                IconButton(onClick = { excludeFilterText = "" }) {
+                                                    Icon(Icons.Default.Clear, contentDescription = "Сброс", modifier = Modifier.size(16.dp))
+                                                }
+                                            }
+                                        }
+                                    )
+
+                                    Spacer(modifier = Modifier.height(4.dp))
+
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        modifier = Modifier.horizontalScroll(rememberScrollState())
+                                    ) {
+                                        listOf("лук", "чеснок", "перец", "мясо").forEach { allergen ->
+                                            val isSelected = excludeFilterText.equals(allergen, ignoreCase = true)
+                                            FilterChip(
+                                                selected = isSelected,
+                                                onClick = { excludeFilterText = if (isSelected) "" else allergen },
+                                                label = { Text("Без $allergen", fontSize = 11.sp) }
+                                            )
+                                        }
                                     }
                                 }
                             }
