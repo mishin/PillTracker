@@ -10,87 +10,82 @@ object NamNyamScraper {
     private const val MENU_URL = "https://www.nam-nyam.ru/menu-na-nedelu/"
     private const val BASE_URL = "https://www.nam-nyam.ru"
 
-    // Кэш соответствия: нормализованное_название -> URL картинки
-    private val imageCache = mutableMapOf<String, String>()
+    private val imageMap = mutableMapOf<String, String>()
     private var isScraped = false
 
-    // Загрузка и парсинг изображений с официальной страницы меню
     suspend fun fetchMenuImages(context: Context): Map<String, String> = withContext(Dispatchers.IO) {
-        if (isScraped && imageCache.isNotEmpty()) {
-            return@withContext imageCache
+        if (isScraped && imageMap.isNotEmpty()) {
+            return@withContext imageMap
         }
 
         try {
-            AppLogger.log(context, "SCRAPER", "Начало граббинга картинок с $MENU_URL...")
+            AppLogger.log(context, "SCRAPER", "Парсинг каталога и картинок с $MENU_URL")
             val doc = Jsoup.connect(MENU_URL)
                 .userAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36")
-                .timeout(15000)
+                .timeout(20000)
                 .get()
 
-            // Ищем все элементы с картинками блюд на странице Битрикс
-            val imgElements = doc.select("img")
-            var count = 0
+            // 1. Парсинг карточек товаров Битрикс (прямая связь заголовка и картинки)
+            val elements = doc.select("a[href*='/catalog/'], div[class*='item'], div[class*='product'], tr[class*='item']")
+            for (elem in elements) {
+                val titleElem = elem.select(".name, .title, a[title], h3, h4, span[class*='title']").firstOrNull()
+                val imgElem = elem.select("img").firstOrNull()
 
-            for (img in imgElements) {
-                val title = (img.attr("title").ifEmpty { img.attr("alt") }).trim()
-                var src = img.attr("src").ifEmpty { img.attr("data-src") }
+                val title = (titleElem?.attr("title")?.ifEmpty { titleElem.text() } ?: imgElem?.attr("alt") ?: imgElem?.attr("title") ?: "").trim()
+                var src = imgElem?.attr("src")?.ifEmpty { imgElem.attr("data-src") }?.ifEmpty { imgElem.attr("data-original") } ?: ""
 
                 if (title.isNotEmpty() && src.isNotEmpty()) {
                     if (src.startsWith("/")) {
                         src = BASE_URL + src
                     }
-                    val normalizedKey = normalizeName(title)
-                    imageCache[normalizedKey] = src
-                    count++
-                }
-            }
-
-            // Также парсим ссылки в карточках каталога (.catalog-item, .product-card и т.д.)
-            val cards = doc.select("div[class*='item'], div[class*='product'], div[class*='card']")
-            for (card in cards) {
-                val titleElem = card.select("a[title], .name, .title, h3, h4").firstOrNull()
-                val imgElem = card.select("img").firstOrNull()
-                if (titleElem != null && imgElem != null) {
-                    val title = (titleElem.attr("title").ifEmpty { titleElem.text() }).trim()
-                    var src = imgElem.attr("src").ifEmpty { imgElem.attr("data-src") }
-                    if (title.isNotEmpty() && src.isNotEmpty()) {
-                        if (src.startsWith("/")) {
-                            src = BASE_URL + src
-                        }
-                        imageCache[normalizeName(title)] = src
+                    if (!src.contains("logo") && !src.contains("icon")) {
+                        imageMap[cleanText(title)] = src
                     }
                 }
             }
 
+            // 2. Дополнительный проход по всем тегам img
+            val allImgs = doc.select("img")
+            for (img in allImgs) {
+                val alt = (img.attr("alt").ifEmpty { img.attr("title") }).trim()
+                var src = img.attr("src").ifEmpty { img.attr("data-src") }
+                if (alt.length > 3 && src.isNotEmpty() && !src.contains("logo") && !src.contains("icon")) {
+                    if (src.startsWith("/")) {
+                        src = BASE_URL + src
+                    }
+                    imageMap[cleanText(alt)] = src
+                }
+            }
+
             isScraped = true
-            AppLogger.log(context, "SCRAPER", "Граббинг завершен. Найдено картинок: ${imageCache.size}")
+            AppLogger.log(context, "SCRAPER", "Готово! Собрано оригинальных изображений: ${imageMap.size}")
         } catch (e: Exception) {
-            AppLogger.log(context, "SCRAPER_ERROR", "Ошибка парсинга сайта нам-ням: ${e.message}", e)
+            AppLogger.log(context, "SCRAPER_ERROR", "Сбой граббинга: ${e.message}", e)
         }
 
-        return@withContext imageCache
+        return@withContext imageMap
     }
 
-    // Поиск картинки для конкретного блюда из таблицы
+    // Поиск лучшего соответствия для блюда из Google Таблицы
     fun findImageForDish(dishName: String): String? {
-        val target = normalizeName(dishName)
-        
-        // 1. Прямое совпадение нормализованного ключа
-        imageCache[target]?.let { return it }
+        val target = cleanText(dishName)
 
-        // 2. Поиск по началу названия (например, "морковь по-корейски" без граммовки)
-        for ((key, url) in imageCache) {
-            if (target.contains(key) || key.contains(target)) {
+        // Точное совпадение
+        imageMap[target]?.let { return it }
+
+        // Совпадение по вхождению подстроки
+        for ((name, url) in imageMap) {
+            if (name.length > 4 && (target.contains(name) || name.contains(target))) {
                 return url
             }
         }
 
-        // 3. Поиск по первым двум словам названия блюда
-        val words = target.split(" ").filter { it.length > 2 }
-        if (words.size >= 2) {
-            val prefix = "${words[0]} ${words[1]}"
-            for ((key, url) in imageCache) {
-                if (key.startsWith(prefix)) {
+        // Совпадение по первым 2 ключевым словам (например "винегрет овощной")
+        val keywords = target.split(" ").filter { it.length > 2 }
+        if (keywords.isNotEmpty()) {
+            val firstWord = keywords[0]
+            for ((name, url) in imageMap) {
+                if (name.startsWith(firstWord)) {
                     return url
                 }
             }
@@ -99,13 +94,10 @@ object NamNyamScraper {
         return null
     }
 
-    // Удаление веса, кавычек и спецсимволов для точного сопоставления
-    private fun normalizeName(rawName: String): String {
-        return rawName.lowercase()
-            .replace(Regex("""\b\d+\s*(г|гр|мл|шт)?\b"""), "") // удаляем "150 г", "200г"
-            .replace("\"", "")
-            .replace("«", "")
-            .replace("»", "")
+    private fun cleanText(text: String): String {
+        return text.lowercase()
+            .replace(Regex("""\b\d+\s*(г|гр|мл|шт)?\b"""), "")
+            .replace(Regex("""[«»"'\(\)]"""), "")
             .replace(Regex("""\s+"""), " ")
             .trim()
     }

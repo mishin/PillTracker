@@ -5,6 +5,7 @@ import com.google.api.client.http.javanet.NetHttpTransport
 import com.google.api.client.json.gson.GsonFactory
 import com.google.api.services.sheets.v4.Sheets
 import com.google.api.services.sheets.v4.SheetsScopes
+import com.google.api.services.sheets.v4.model.BatchUpdateValuesRequest
 import com.google.api.services.sheets.v4.model.ValueRange
 import com.google.auth.http.HttpCredentialsAdapter
 import com.google.auth.oauth2.GoogleCredentials
@@ -67,7 +68,7 @@ object GoogleSheetsManager {
             AppLogger.log(context, "GET_SHEETS", "Листы получены (${list.size}): ${list.map { it.title }}")
             list
         } catch (e: Exception) {
-            AppLogger.log(context, "GET_SHEETS_ERROR", "Ошибка доступа к таблице '$spreadsheetId': ${e.message}", e)
+            AppLogger.log(context, "GET_SHEETS_ERROR", "Ошибка доступа к таблице '$spreadsheetId': ${e.message}\nУбедитесь, что таблица расшарена для $SERVICE_ACCOUNT_EMAIL", e)
             emptyList()
         }
     }
@@ -80,6 +81,7 @@ object GoogleSheetsManager {
     ): DayMenuResult = withContext(Dispatchers.IO) {
         val service = sheetsService ?: return@withContext DayMenuResult()
 
+        // Запуск парсера картинок с сайта
         NamNyamScraper.fetchMenuImages(context)
 
         val empColLetter = getColumnLetter(employeeNumber + 2)
@@ -140,7 +142,7 @@ object GoogleSheetsManager {
                 }
             }
 
-            AppLogger.log(context, "LOAD_MENU", "Загружено блюд: ${dishes.size}, заказов сотрудника №$employeeNumber: ${initialOrders.size}")
+            AppLogger.log(context, "LOAD_MENU", "Загружено блюд: ${dishes.size}, текущих заказов сотрудника №$employeeNumber: ${initialOrders.size}")
 
             DayMenuResult(
                 dateHeader = dateHeader,
@@ -153,6 +155,7 @@ object GoogleSheetsManager {
         }
     }
 
+    // Сохранение заказа сотрудника ОДНИМ ПАКЕТНЫМ ЗАПРОСОМ (Batch Update)
     suspend fun submitOrder(
         context: Context,
         spreadsheetId: String,
@@ -163,29 +166,43 @@ object GoogleSheetsManager {
     ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
         val service = sheetsService ?: return@withContext Pair(false, "API не инициализирован")
 
+        if (allDishes.isEmpty()) {
+            return@withContext Pair(false, "Список блюд пуст")
+        }
+
         val colLetter = getColumnLetter(employeeNumber + 2)
+        val minRow = allDishes.minOf { it.rowIndex }
+        val maxRow = allDishes.maxOf { it.rowIndex }
 
         try {
-            var updatedCount = 0
-            for (dish in allDishes) {
-                val qty = currentQuantities[dish.rowIndex] ?: 0
-                val cellAddress = "'$sheetTitle'!$colLetter${dish.rowIndex}"
-                val cellValue = if (qty > 0) qty else ""
-                val body = ValueRange().setValues(listOf(listOf(cellValue)))
-
-                service.spreadsheets().values()
-                    .update(spreadsheetId, cellAddress, body)
-                    .setValueInputOption("USER_ENTERED")
-                    .execute()
-                updatedCount++
+            // Формируем вертикальный массив ячеек с minRow до maxRow
+            val columnValues = mutableListOf<List<Any>>()
+            for (row in minRow..maxRow) {
+                val qty = currentQuantities[row] ?: 0
+                val cellVal = if (qty > 0) qty else ""
+                columnValues.add(listOf(cellVal))
             }
 
-            val msg = "Успешно записано $updatedCount позиций в колонку $colLetter"
+            val rangeToUpdate = "'$sheetTitle'!$colLetter$minRow:$colLetter$maxRow"
+            val valueRange = ValueRange()
+                .setRange(rangeToUpdate)
+                .setValues(columnValues)
+
+            val batchRequest = BatchUpdateValuesRequest()
+                .setValueInputOption("USER_ENTERED")
+                .setData(listOf(valueRange))
+
+            // Выполняем РОВНО 1 сетевой запрос вместо 133!
+            service.spreadsheets().values()
+                .batchUpdate(spreadsheetId, batchRequest)
+                .execute()
+
+            val msg = "Успешно записано в колонку $colLetter ($rangeToUpdate)"
             AppLogger.log(context, "SUBMIT_OK", msg)
             Pair(true, msg)
         } catch (e: Exception) {
             val msg = "Ошибка: ${e.message}"
-            AppLogger.log(context, "SUBMIT_FAIL", "Ошибка сохранения: ${e.message}", e)
+            AppLogger.log(context, "SUBMIT_FAIL", "Сбой batchUpdate в '$spreadsheetId' (лист '$sheetTitle'): ${e.message}", e)
             Pair(false, msg)
         }
     }
