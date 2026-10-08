@@ -15,12 +15,12 @@ import java.util.regex.Pattern
 
 object GoogleSheetsManager {
 
-    // Таблица по умолчанию
     const val DEFAULT_SPREADSHEET_ID = "10PDOQjOTR0_y8uGY2OFBjWDaFYgh8HkLYxa3hOi0NGM"
+    const val SERVICE_ACCOUNT_EMAIL = "acc-45@mypython-393312.iam.gserviceaccount.com"
 
     private var sheetsService: Sheets? = null
 
-    // Инициализация учетных данных Service Account из assets/service_account.json
+    // Инициализация учетных данных
     fun initCredentials(context: Context) {
         if (sheetsService != null) return
         try {
@@ -33,12 +33,14 @@ object GoogleSheetsManager {
                 GsonFactory.getDefaultInstance(),
                 HttpCredentialsAdapter(credentials)
             ).setApplicationName("NamNyam Order App").build()
+
+            AppLogger.log(context, "INIT", "Учетные данные успешно инициализированы для $SERVICE_ACCOUNT_EMAIL")
         } catch (e: Exception) {
-            e.printStackTrace()
+            AppLogger.log(context, "INIT_ERROR", "Ошибка инициализации service_account.json: ${e.message}", e)
         }
     }
 
-    // Извлечение Spreadsheet ID из произвольной ссылки на Google Таблицу
+    // Извлечение Spreadsheet ID из ссылки
     fun extractSpreadsheetId(url: String): String {
         val cleanUrl = url.trim()
         val matcher = Pattern.compile("/spreadsheets/d/([a-zA-Z0-9-_]+)").matcher(cleanUrl)
@@ -51,34 +53,41 @@ object GoogleSheetsManager {
         }
     }
 
-    // Получение списка всех листов таблицы с их названиями и ID
-    suspend fun getSheetTitles(spreadsheetId: String): List<SheetInfo> = withContext(Dispatchers.IO) {
-        val service = sheetsService ?: return@withContext emptyList()
+    // Получение списка всех листов таблицы
+    suspend fun getSheetTitles(context: Context, spreadsheetId: String): List<SheetInfo> = withContext(Dispatchers.IO) {
+        val service = sheetsService ?: run {
+            AppLogger.log(context, "GET_SHEETS", "Сервис не инициализирован")
+            return@withContext emptyList()
+        }
         try {
             val spreadsheet = service.spreadsheets().get(spreadsheetId).execute()
-            spreadsheet.sheets?.map { sheet ->
+            val list = spreadsheet.sheets?.map { sheet ->
                 SheetInfo(
                     id = sheet.properties.sheetId,
                     title = sheet.properties.title
                 )
             } ?: emptyList()
+            AppLogger.log(context, "GET_SHEETS", "Успешно получены листы (${list.size}): ${list.map { it.title }}")
+            list
         } catch (e: Exception) {
-            e.printStackTrace()
+            AppLogger.log(context, "GET_SHEETS_ERROR", "Не удалось прочитать таблицу $spreadsheetId: ${e.message}", e)
             emptyList()
         }
     }
 
-    // Загрузка блюд и УЖЕ существующих заказов выбранного сотрудника
+    // Загрузка блюд и существующих заказов
     suspend fun loadMenuAndCurrentOrder(
+        context: Context,
         spreadsheetId: String,
         sheetTitle: String,
         employeeNumber: Int
     ): DayMenuResult = withContext(Dispatchers.IO) {
-        val service = sheetsService ?: return@withContext DayMenuResult()
+        val service = sheetsService ?: run {
+            AppLogger.log(context, "LOAD_MENU", "Сервис не инициализирован")
+            return@withContext DayMenuResult()
+        }
 
-        // Колонка A=1 (Блюдо), B=2 (Цена), Сотрудник N = N + 2
         val empColLetter = getColumnLetter(employeeNumber + 2)
-        // Исправлена интерполяция строки: ${empColLetter}150 вместо $empColLetter150
         val readRange = "'$sheetTitle'!A1:${empColLetter}150"
 
         try {
@@ -90,7 +99,6 @@ object GoogleSheetsManager {
             val dishes = mutableListOf<DishItem>()
             val initialOrders = mutableMapOf<Int, Int>()
 
-            // Читаем дату дня из строк заголовка (обычно строки 1-3)
             var dateHeader = ""
             for (i in 0..minOf(3, rows.size - 1)) {
                 val rowStr = rows[i].joinToString(" ")
@@ -112,14 +120,12 @@ object GoogleSheetsManager {
                 if (name.isNotEmpty()) {
                     val price = priceRaw.toDoubleOrNull()
                     if (price == null || price == 0.0) {
-                        // Строка секции/категории
                         if (!name.equals("Наименование", ignoreCase = true) && !name.equals("ИТОГО:", ignoreCase = true)) {
                             currentCategory = name
                         }
                     } else {
-                        // Генерируем ссылку превью блюда
-                        val encodedDish = name.replace(" ", "%20")
-                        val photoUrl = "https://www.nam-nyam.ru/images/menu/$encodedDish.jpg"
+                        // Подбираем URL реалистичной аппетитной картинки по категории и названию
+                        val imageUrl = resolveDishImageUrl(name, currentCategory)
 
                         dishes.add(
                             DishItem(
@@ -127,11 +133,10 @@ object GoogleSheetsManager {
                                 name = name,
                                 price = price,
                                 category = currentCategory,
-                                imageUrl = photoUrl
+                                imageUrl = imageUrl
                             )
                         )
 
-                        // Чтение того, что уже заказано этим сотрудником в таблице
                         val currentValRaw = row.getOrNull(empColIdx)?.toString()?.trim() ?: ""
                         val currentQty = currentValRaw.toIntOrNull() ?: 0
                         if (currentQty > 0) {
@@ -141,30 +146,38 @@ object GoogleSheetsManager {
                 }
             }
 
+            AppLogger.log(context, "LOAD_MENU", "Загружено ${dishes.size} блюд для листа '$sheetTitle'. Заказов найдено: ${initialOrders.size}")
+
             DayMenuResult(
                 dateHeader = dateHeader,
                 dishes = dishes,
                 existingOrders = initialOrders
             )
         } catch (e: Exception) {
-            e.printStackTrace()
+            AppLogger.log(context, "LOAD_MENU_ERROR", "Ошибка загрузки меню: ${e.message}", e)
             DayMenuResult()
         }
     }
 
     // Сохранение заказа сотрудника в таблицу
     suspend fun submitOrder(
+        context: Context,
         spreadsheetId: String,
         sheetTitle: String,
         employeeNumber: Int,
         allDishes: List<DishItem>,
         currentQuantities: Map<Int, Int>
-    ): Boolean = withContext(Dispatchers.IO) {
-        val service = sheetsService ?: return@withContext false
+    ): Pair<Boolean, String> = withContext(Dispatchers.IO) {
+        val service = sheetsService ?: run {
+            val msg = "Сервис не инициализирован. Проверьте assets/service_account.json"
+            AppLogger.log(context, "SUBMIT_ERROR", msg)
+            return@withContext Pair(false, msg)
+        }
+
         val colLetter = getColumnLetter(employeeNumber + 2)
 
         try {
-            // Записываем порции (или очищаем, если стало 0)
+            var updatedCount = 0
             for (dish in allDishes) {
                 val qty = currentQuantities[dish.rowIndex] ?: 0
                 val cellAddress = "'$sheetTitle'!$colLetter${dish.rowIndex}"
@@ -175,11 +188,17 @@ object GoogleSheetsManager {
                     .update(spreadsheetId, cellAddress, body)
                     .setValueInputOption("USER_ENTERED")
                     .execute()
+                updatedCount++
             }
-            true
+
+            val successMsg = "Заказ успешно сохранен в колонку $colLetter (строки: $updatedCount)"
+            AppLogger.log(context, "SUBMIT_SUCCESS", successMsg)
+            Pair(true, successMsg)
+
         } catch (e: Exception) {
-            e.printStackTrace()
-            false
+            val errMsg = "Ошибка сохранения: ${e.message}"
+            AppLogger.log(context, "SUBMIT_ERROR", "Сбой при записи в таблицу $spreadsheetId ($sheetTitle, колонка $colLetter): ${e.message}\nВАЖНО: Убедитесь, что таблица расшарена сервисному аккаунту $SERVICE_ACCOUNT_EMAIL с правами Редактора!", e)
+            Pair(false, errMsg)
         }
     }
 
@@ -192,6 +211,31 @@ object GoogleSheetsManager {
             temp = (temp - 1) / 26
         }
         return letter
+    }
+
+    // Надежное сопоставление фото блюд по ключевым словам и категориям (Unsplash Food CDN)
+    private fun resolveDishImageUrl(dishName: String, category: String): String {
+        val lower = dishName.lowercase()
+        return when {
+            lower.contains("борщ") -> "https://images.unsplash.com/photo-1547592166-23ac45744acd?w=300&q=80"
+            lower.contains("суп") || lower.contains("крем-суп") -> "https://images.unsplash.com/photo-1547592180-85f173990554?w=300&q=80"
+            lower.contains("сырник") || lower.contains("запеканка") -> "https://images.unsplash.com/photo-1579954115545-a95591f28bfc?w=300&q=80"
+            lower.contains("каша") -> "https://images.unsplash.com/photo-1586444248902-2f64eddc13df?w=300&q=80"
+            lower.contains("блин") -> "https://images.unsplash.com/photo-1528207776546-365bb710ee93?w=300&q=80"
+            lower.contains("салат") || lower.contains("цезарь") || lower.contains("оливье") -> "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?w=300&q=80"
+            lower.contains("плов") || lower.contains("рис") -> "https://images.unsplash.com/photo-1536304929831-ee1ca9d44906?w=300&q=80"
+            lower.contains("котлет") || lower.contains("биточк") -> "https://images.unsplash.com/photo-1529692236671-f1f6cf9683ba?w=300&q=80"
+            lower.contains("куриц") || lower.contains("окороч") || lower.contains("шашлык") -> "https://images.unsplash.com/photo-1598515214211-89d3c73ae83b?w=300&q=80"
+            lower.contains("паста") || lower.contains("макарон") || lower.contains("спагетти") -> "https://images.unsplash.com/photo-1621996346565-e3d5d6281724?w=300&q=80"
+            lower.contains("рыб") || lower.contains("минтай") -> "https://images.unsplash.com/photo-1519708227418-c8fd9a32b7a2?w=300&q=80"
+            lower.contains("вареник") || lower.contains("пельмен") || lower.contains("манты") -> "https://images.unsplash.com/photo-1541592106381-b31e9677c0e5?w=300&q=80"
+            category.contains("Завтрак") -> "https://images.unsplash.com/photo-1525351484163-7529414344d8?w=300&q=80"
+            category.contains("Первые") -> "https://images.unsplash.com/photo-1547592180-85f173990554?w=300&q=80"
+            category.contains("Вторые") -> "https://images.unsplash.com/photo-1544025162-d76694265947?w=300&q=80"
+            category.contains("Гарнир") -> "https://images.unsplash.com/photo-1514944298352-1bc541ef8c0a?w=300&q=80"
+            category.contains("Выпечка") || category.contains("Блины") -> "https://images.unsplash.com/photo-1509440159596-0249088772ff?w=300&q=80"
+            else -> "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=300&q=80"
+        }
     }
 }
 

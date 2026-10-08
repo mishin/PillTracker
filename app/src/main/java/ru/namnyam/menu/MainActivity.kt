@@ -7,13 +7,14 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -24,11 +25,14 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import kotlinx.coroutines.launch
+import ru.namnyam.menu.data.AppLogger
 import ru.namnyam.menu.data.DishItem
 import ru.namnyam.menu.data.GoogleSheetsManager
 import ru.namnyam.menu.data.SheetInfo
@@ -61,7 +65,6 @@ fun OrderMenuScreen() {
     val scope = rememberCoroutineScope()
     val prefs = remember { context.getSharedPreferences("app_settings", Context.MODE_PRIVATE) }
 
-    // Сохранение и загрузка настроек таблицы и номера сотрудника
     var tableUrl by remember {
         mutableStateOf(
             prefs.getString("table_url", "https://docs.google.com/spreadsheets/d/10PDOQjOTR0_y8uGY2OFBjWDaFYgh8HkLYxa3hOi0NGM/edit") ?: ""
@@ -75,20 +78,22 @@ fun OrderMenuScreen() {
     var dateHeader by remember { mutableStateOf("") }
 
     var dishes by remember { mutableStateOf<List<DishItem>>(emptyList()) }
-    val orderState = remember { mutableStateMapOf<Int, Int>() } // rowIndex -> количество
-    val collapsedCategories = remember { mutableStateMapOf<String, Boolean>() } // category -> isCollapsed
+    val orderState = remember { mutableStateMapOf<Int, Int>() }
+    val collapsedCategories = remember { mutableStateMapOf<String, Boolean>() }
 
     var isLoading by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showEmployeePicker by remember { mutableStateOf(false) }
+    var showLogDialog by remember { mutableStateOf(false) }
+    var logContent by remember { mutableStateOf("") }
 
     val totalSum = dishes.sumOf { (orderState[it.rowIndex] ?: 0) * it.price }
     val budgetLimit = 600.0
 
-    // Первичная загрузка листов таблицы
+    // Загрузка листов таблицы
     LaunchedEffect(spreadsheetId) {
         isLoading = true
-        val sheets = GoogleSheetsManager.getSheetTitles(spreadsheetId)
+        val sheets = GoogleSheetsManager.getSheetTitles(context, spreadsheetId)
         availableSheets = sheets
         if (sheets.isNotEmpty()) {
             selectedSheetTitle = sheets.first().title
@@ -96,17 +101,74 @@ fun OrderMenuScreen() {
         isLoading = false
     }
 
-    // Загрузка блюд и уже существующих заказов при смене листа или сотрудника
+    // Загрузка меню и заказов
     LaunchedEffect(selectedSheetTitle, employeeNumber) {
         if (selectedSheetTitle.isNotEmpty()) {
             isLoading = true
-            val result = GoogleSheetsManager.loadMenuAndCurrentOrder(spreadsheetId, selectedSheetTitle, employeeNumber)
+            val result = GoogleSheetsManager.loadMenuAndCurrentOrder(context, spreadsheetId, selectedSheetTitle, employeeNumber)
             dishes = result.dishes
             dateHeader = result.dateHeader
             orderState.clear()
-            orderState.putAll(result.existingOrders) // Загружаем то, что уже в таблице
+            orderState.putAll(result.existingOrders)
             isLoading = false
         }
+    }
+
+    // Диалог просмотра и отправки логов
+    if (showLogDialog) {
+        AlertDialog(
+            onDismissRequest = { showLogDialog = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.BugReport, null, tint = Color(0xFF2E7D32))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Журнал ошибок (Лог)")
+                }
+            },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        "Аккаунт: ${GoogleSheetsManager.SERVICE_ACCOUNT_EMAIL}",
+                        fontSize = 11.sp,
+                        color = Color.Gray,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(280.dp)
+                            .background(Color(0xFF1E1E1E), RoundedCornerShape(6.dp))
+                            .padding(8.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        Text(
+                            text = logContent.ifEmpty { "Записей в логе нет." },
+                            color = Color(0xFF4AF626),
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 11.sp
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                Button(onClick = {
+                    AppLogger.shareLogFile(context)
+                }) {
+                    Icon(Icons.Default.Share, null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Скачать / Поделиться")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    AppLogger.clearLog(context)
+                    logContent = "Лог очищен."
+                }) {
+                    Text("Очистить", color = Color.Red)
+                }
+            }
+        )
     }
 
     // Диалог настройки URL таблицы
@@ -117,14 +179,19 @@ fun OrderMenuScreen() {
             title = { Text("Настройка Google Таблицы") },
             text = {
                 Column {
-                    Text("Вставьте ссылку на Google Таблицу заказов:", fontSize = 13.sp)
+                    Text("Вставьте ссылку на Google Таблицу:", fontSize = 13.sp)
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedTextField(
                         value = tempUrl,
                         onValueChange = { tempUrl = it },
                         modifier = Modifier.fillMaxWidth(),
-                        singleLine = false,
                         maxLines = 3
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "⚠️ Важно: Добавьте почту сервисного аккаунта в доступ таблицы (как Редактора):\n${GoogleSheetsManager.SERVICE_ACCOUNT_EMAIL}",
+                        fontSize = 11.sp,
+                        color = Color(0xFFC62828)
                     )
                 }
             },
@@ -160,20 +227,20 @@ fun OrderMenuScreen() {
                     titleContentColor = Color.White
                 ),
                 actions = {
-                    // Выбор своего номера сотрудника
+                    // Кнопка логов
+                    IconButton(onClick = {
+                        logContent = AppLogger.readLog(context)
+                        showLogDialog = true
+                    }) {
+                        Icon(Icons.Default.BugReport, contentDescription = "Логи", tint = Color.White)
+                    }
+                    // Выбор сотрудника
                     IconButton(onClick = { showEmployeePicker = true }) {
-                        Icon(Icons.Default.Person, contentDescription = "Номер сотрудника", tint = Color.White)
+                        Icon(Icons.Default.Person, contentDescription = "Сотрудник", tint = Color.White)
                     }
                     // Настройки таблицы
                     IconButton(onClick = { showSettingsDialog = true }) {
                         Icon(Icons.Default.Settings, contentDescription = "Настройки", tint = Color.White)
-                    }
-                    // Открытие сайта
-                    IconButton(onClick = {
-                        val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.nam-nyam.ru/menu-na-nedelu/"))
-                        context.startActivity(browserIntent)
-                    }) {
-                        Icon(Icons.Default.Language, contentDescription = "Сайт Нам-Ням", tint = Color.White)
                     }
                 }
             )
@@ -204,7 +271,8 @@ fun OrderMenuScreen() {
                             onClick = {
                                 scope.launch {
                                     isLoading = true
-                                    val success = GoogleSheetsManager.submitOrder(
+                                    val (success, message) = GoogleSheetsManager.submitOrder(
+                                        context = context,
                                         spreadsheetId = spreadsheetId,
                                         sheetTitle = selectedSheetTitle,
                                         employeeNumber = employeeNumber,
@@ -215,7 +283,9 @@ fun OrderMenuScreen() {
                                     if (success) {
                                         Toast.makeText(context, "✅ Заказ сохранен в таблице!", Toast.LENGTH_SHORT).show()
                                     } else {
-                                        Toast.makeText(context, "❌ Ошибка сохранения", Toast.LENGTH_SHORT).show()
+                                        Toast.makeText(context, "❌ $message (см. Лог 📝)", Toast.LENGTH_LONG).show()
+                                        logContent = AppLogger.readLog(context)
+                                        showLogDialog = true
                                     }
                                 }
                             },
@@ -234,7 +304,7 @@ fun OrderMenuScreen() {
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Верхняя панель: Быстрый выбор сотрудника и Дня недели
+            // Панель выбора сотрудника и дней недели
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -248,8 +318,7 @@ fun OrderMenuScreen() {
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Вы заказываете для:", fontSize = 13.sp)
-                        // Меню быстрого выбора номера сотрудника
+                        Text("Сотрудник:", fontSize = 13.sp)
                         Box {
                             AssistChip(
                                 onClick = { showEmployeePicker = true },
@@ -277,7 +346,6 @@ fun OrderMenuScreen() {
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // Горизонтальный список дней недели (листов)
                     Text("Выберите день:", fontSize = 12.sp, color = Color.Gray)
                     Row(
                         modifier = Modifier
@@ -302,7 +370,6 @@ fun OrderMenuScreen() {
                     CircularProgressIndicator(color = Color(0xFF2E7D32))
                 }
             } else {
-                // Группировка блюд по категориям (Аккордеон)
                 val groupedDishes = remember(dishes) { dishes.groupBy { it.category } }
 
                 LazyColumn(
@@ -313,7 +380,6 @@ fun OrderMenuScreen() {
                         val isCollapsed = collapsedCategories[category] ?: false
                         val categoryOrderedCount = categoryDishes.sumOf { orderState[it.rowIndex] ?: 0 }
 
-                        // Заголовок категории (Аккордеон)
                         item(key = "header_$category") {
                             Surface(
                                 modifier = Modifier
@@ -350,7 +416,6 @@ fun OrderMenuScreen() {
                             }
                         }
 
-                        // Элементы категории блюд
                         if (!isCollapsed) {
                             items(categoryDishes, key = { it.rowIndex }) { dish ->
                                 val count = orderState[dish.rowIndex] ?: 0
@@ -370,14 +435,17 @@ fun OrderMenuScreen() {
                                             .fillMaxWidth(),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        // Картинка блюда
+                                        // Загрузка реального фото блюда с Coil
                                         AsyncImage(
-                                            model = dish.imageUrl,
+                                            model = ImageRequest.Builder(context)
+                                                .data(dish.imageUrl)
+                                                .crossfade(true)
+                                                .build(),
                                             contentDescription = dish.name,
                                             modifier = Modifier
-                                                .size(56.dp)
-                                                .clip(RoundedCornerShape(6.dp))
-                                                .background(Color(0xFFEEEEEE))
+                                                .size(64.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(Color(0xFFE0E0E0))
                                                 .clickable {
                                                     val i = Intent(Intent.ACTION_VIEW, Uri.parse(dish.descriptionUrl))
                                                     context.startActivity(i)
@@ -397,7 +465,6 @@ fun OrderMenuScreen() {
                                             )
                                         }
 
-                                        // Кнопки добавления порций
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             if (count > 0) {
                                                 IconButton(
