@@ -67,8 +67,11 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
 
-    // Coil для отображения фото блюд с сайта Нам-Ням
+    // Coil для загрузки фото
     implementation("io.coil-kt:coil-compose:2.5.0")
+
+    // Jsoup для граббинга реальных картинок с сайта nam-nyam.ru
+    implementation("org.jsoup:jsoup:1.17.2")
 
     // Google Sheets API v4 и Google Auth
     implementation("com.google.api-client:google-api-client-android:2.2.0")
@@ -76,7 +79,7 @@ dependencies {
     implementation("com.google.auth:google-auth-library-oauth2-http:1.19.0")
     implementation("com.google.code.gson:gson:2.10.1")
 
-    // Настройки пользователя (DataStore)
+    // Настройки пользователя (DataStore / Preferences)
     implementation("androidx.datastore:datastore-preferences:1.0.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 

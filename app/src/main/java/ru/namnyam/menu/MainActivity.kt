@@ -114,7 +114,7 @@ fun OrderMenuScreen() {
         }
     }
 
-    // Диалог просмотра и отправки логов
+    // Диалог логов
     if (showLogDialog) {
         AlertDialog(
             onDismissRequest = { showLogDialog = false },
@@ -227,18 +227,15 @@ fun OrderMenuScreen() {
                     titleContentColor = Color.White
                 ),
                 actions = {
-                    // Кнопка логов
                     IconButton(onClick = {
                         logContent = AppLogger.readLog(context)
                         showLogDialog = true
                     }) {
                         Icon(Icons.Default.BugReport, contentDescription = "Логи", tint = Color.White)
                     }
-                    // Выбор сотрудника
                     IconButton(onClick = { showEmployeePicker = true }) {
                         Icon(Icons.Default.Person, contentDescription = "Сотрудник", tint = Color.White)
                     }
-                    // Настройки таблицы
                     IconButton(onClick = { showSettingsDialog = true }) {
                         Icon(Icons.Default.Settings, contentDescription = "Настройки", tint = Color.White)
                     }
@@ -304,7 +301,6 @@ fun OrderMenuScreen() {
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Панель выбора сотрудника и дней недели
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -353,7 +349,7 @@ fun OrderMenuScreen() {
                             .padding(top = 4.dp),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        availableSheets.forEach { sheet ->
+                        availableSheets.forEach { sheet: SheetInfo ->
                             val label = sheet.title.split(" ").firstOrNull() ?: sheet.title
                             FilterChip(
                                 selected = selectedSheetTitle == sheet.title,
@@ -435,7 +431,6 @@ fun OrderMenuScreen() {
                                             .fillMaxWidth(),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        // Загрузка реального фото блюда с Coil
                                         AsyncImage(
                                             model = ImageRequest.Builder(context)
                                                 .data(dish.imageUrl)
