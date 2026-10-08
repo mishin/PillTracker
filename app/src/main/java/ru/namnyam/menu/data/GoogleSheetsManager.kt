@@ -1,15 +1,16 @@
 package ru.namnyam.menu.data
 
 import android.content.Context
+import com.google.api.client.http.HttpRequestInitializer
 import com.google.api.client.http.javanet.NetHttpTransport
 import com.google.api.client.json.gson.GsonFactory
 import com.google.api.services.sheets.v4.Sheets
 import com.google.api.services.sheets.v4.SheetsScopes
-import com.google.api.services.sheets.v4.model.BatchUpdateValuesRequest
 import com.google.api.services.sheets.v4.model.ValueRange
 import com.google.auth.http.HttpCredentialsAdapter
 import com.google.auth.oauth2.GoogleCredentials
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.io.InputStream
 import java.util.regex.Pattern
@@ -28,10 +29,18 @@ object GoogleSheetsManager {
             val credentials = GoogleCredentials.fromStream(assetStream)
                 .createScoped(listOf(SheetsScopes.SPREADSHEETS))
 
+            val credentialsAdapter = HttpCredentialsAdapter(credentials)
+            val requestInitializer = HttpRequestInitializer { request ->
+                credentialsAdapter.initialize(request)
+                // Увеличенные таймауты против сбоев мобильного интернета
+                request.connectTimeout = 60_000
+                request.readTimeout = 60_000
+            }
+
             sheetsService = Sheets.Builder(
                 NetHttpTransport(),
                 GsonFactory.getDefaultInstance(),
-                HttpCredentialsAdapter(credentials)
+                requestInitializer
             ).setApplicationName("NamNyam Order App").build()
 
             AppLogger.log(context, "INIT", "Учетные данные авторизованы: $SERVICE_ACCOUNT_EMAIL")
@@ -122,8 +131,6 @@ object GoogleSheetsManager {
                     } else {
                         val scrapedDetails = NamNyamScraper.findDetailsForDish(name)
                         val realImageUrl = scrapedDetails?.imageUrl ?: resolveFallbackImage(name, currentCategory)
-                        
-                        // Заполнение данных состава и КБЖУ (парсинг или интеллектуальный эталон)
                         val details = resolveDishMetadata(name, scrapedDetails)
 
                         dishes.add(
@@ -162,6 +169,7 @@ object GoogleSheetsManager {
         }
     }
 
+    // Сохранение заказа одним атомарным запросом без превышения квоты 429
     suspend fun submitOrder(
         context: Context,
         spreadsheetId: String,
@@ -177,37 +185,65 @@ object GoogleSheetsManager {
         }
 
         val colLetter = getColumnLetter(employeeNumber + 2)
+        val minRow = allDishes.minOf { it.rowIndex }
+        val maxRow = allDishes.maxOf { it.rowIndex }
+        val dishRowsMap = allDishes.associateBy { it.rowIndex }
 
-        try {
-            val valueRanges = mutableListOf<ValueRange>()
+        // Считываем текущую колонку, чтобы не стереть промежуточные разделители
+        val readRange = "'$sheetTitle'!$colLetter$minRow:$colLetter$maxRow"
 
-            for (dish in allDishes) {
-                val qty = currentQuantities[dish.rowIndex] ?: 0
-                val cellVal = if (qty > 0) qty else ""
-                val cellRange = "'$sheetTitle'!$colLetter${dish.rowIndex}"
-                valueRanges.add(
-                    ValueRange()
-                        .setRange(cellRange)
-                        .setValues(listOf(listOf(cellVal)))
-                )
+        var lastError: Exception? = null
+        for (attempt in 1..3) {
+            try {
+                val currentColumnValues = try {
+                    service.spreadsheets().values()
+                        .get(spreadsheetId, readRange)
+                        .execute()
+                        .getValues() ?: emptyList()
+                } catch (e: Exception) {
+                    emptyList()
+                }
+
+                val rowCount = maxRow - minRow + 1
+                val updatedValues = ArrayList<List<Any>>(rowCount)
+
+                for (offset in 0 until rowCount) {
+                    val actualRow = minRow + offset
+                    val existingCell = currentColumnValues.getOrNull(offset)?.firstOrNull()?.toString() ?: ""
+
+                    if (dishRowsMap.containsKey(actualRow)) {
+                        val qty = currentQuantities[actualRow] ?: 0
+                        val cellVal = if (qty > 0) qty.toString() else ""
+                        updatedValues.add(listOf(cellVal))
+                    } else {
+                        // Оставляем исходное значение не-блюда (раздел, итог и т.п.)
+                        updatedValues.add(listOf(existingCell))
+                    }
+                }
+
+                val body = ValueRange().setValues(updatedValues)
+
+                // Единый запрос обновления одного диапазона (расходует 1 квоту вместо 130+)
+                service.spreadsheets().values()
+                    .update(spreadsheetId, readRange, body)
+                    .setValueInputOption("USER_ENTERED")
+                    .execute()
+
+                val msg = "Успешно записано в колонку $colLetter ($minRow..$maxRow)"
+                AppLogger.log(context, "SUBMIT_OK", msg)
+                return@withContext Pair(true, msg)
+            } catch (e: Exception) {
+                lastError = e
+                AppLogger.log(context, "SUBMIT_RETRY", "Попытка $attempt завершилась ошибкой: ${e.message}")
+                if (attempt < 3) {
+                    delay(1500L * attempt) // Экспоненциальная пауза перед повтором
+                }
             }
-
-            val batchRequest = BatchUpdateValuesRequest()
-                .setValueInputOption("USER_ENTERED")
-                .setData(valueRanges)
-
-            service.spreadsheets().values()
-                .batchUpdate(spreadsheetId, batchRequest)
-                .execute()
-
-            val msg = "Успешно записано в колонку $colLetter (строк: ${valueRanges.size})"
-            AppLogger.log(context, "SUBMIT_OK", msg)
-            Pair(true, msg)
-        } catch (e: Exception) {
-            val msg = "Ошибка: ${e.message}"
-            AppLogger.log(context, "SUBMIT_FAIL", "Сбой batchUpdate: ${e.message}", e)
-            Pair(false, msg)
         }
+
+        val finalMsg = "Ошибка сохранения: ${lastError?.message ?: "неизвестный сбой"}"
+        AppLogger.log(context, "SUBMIT_FAIL", finalMsg, lastError)
+        Pair(false, finalMsg)
     }
 
     private fun getColumnLetter(colIndex: Int): String {
@@ -221,7 +257,6 @@ object GoogleSheetsManager {
         return letter
     }
 
-    // Сопоставление состава блюда для фильтрации и карточки
     private fun resolveDishMetadata(name: String, scraped: ScrapedDishDetails?): ScrapedDishDetails {
         val lower = name.lowercase()
         return when {
