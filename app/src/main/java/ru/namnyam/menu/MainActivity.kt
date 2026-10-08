@@ -81,9 +81,10 @@ fun OrderMenuScreen() {
     val orderState = remember { mutableStateMapOf<Int, Int>() }
     val collapsedCategories = remember { mutableStateMapOf<String, Boolean>() }
 
-    // Состояния фильтра исключения ингредиентов
+    // Состояния прямого поиска блюд и фильтра исключения ингредиентов
+    var searchQuery by remember { mutableStateOf("") }
     var excludeFilterText by remember { mutableStateOf("") }
-    var isFilterExpanded by remember { mutableStateOf(false) }
+    var isExcludeFilterExpanded by remember { mutableStateOf(false) }
     var selectedDishForDetails by remember { mutableStateOf<DishItem?>(null) }
 
     var isLoading by remember { mutableStateOf(false) }
@@ -119,7 +120,7 @@ fun OrderMenuScreen() {
         }
     }
 
-    // Вычисление читаемой даты для заголовка
+    // Читаемая дата для заголовка
     val formattedDayDate = remember(selectedSheetTitle, dateHeader) {
         if (dateHeader.isNotEmpty()) {
             dateHeader
@@ -133,16 +134,18 @@ fun OrderMenuScreen() {
         }
     }
 
-    // Фильтрация списка блюд по нежелательным ингредиентам
-    val filteredDishes = remember(dishes, excludeFilterText) {
-        val filterTrimmed = excludeFilterText.trim().lowercase()
-        if (filterTrimmed.isEmpty()) {
-            dishes
-        } else {
-            dishes.filterNot { dish ->
-                dish.name.lowercase().contains(filterTrimmed) ||
-                dish.composition.lowercase().contains(filterTrimmed)
-            }
+    // Комплексная фильтрация: прямой поиск названия + исключение нежелательных ингредиентов
+    val filteredDishes = remember(dishes, searchQuery, excludeFilterText) {
+        val query = searchQuery.trim().lowercase()
+        val exclude = excludeFilterText.trim().lowercase()
+
+        dishes.filter { dish ->
+            val matchesQuery = query.isEmpty() || dish.name.lowercase().contains(query)
+            val notExcluded = exclude.isEmpty() || (
+                !dish.name.lowercase().contains(exclude) &&
+                !dish.composition.lowercase().contains(exclude)
+            )
+            matchesQuery && notExcluded
         }
     }
 
@@ -325,7 +328,7 @@ fun OrderMenuScreen() {
         )
     }
 
-    // Диалог смены адреса Google Таблицы
+    // Диалог настройки URL таблицы
     if (showSettingsDialog) {
         var tempUrl by remember { mutableStateOf(tableUrl) }
         AlertDialog(
@@ -510,7 +513,7 @@ fun OrderMenuScreen() {
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // Горизонтальный скролл для дней недели (гарантирует видимость всех дней: ПН, ВТ, СР, ЧТ, ПТ)
+                    // Горизонтальный скролл для дней недели (ПН, ВТ, СР, ЧТ, ПТ)
                     val daysScrollState = rememberScrollState()
                     Row(
                         modifier = Modifier
@@ -538,13 +541,38 @@ fun OrderMenuScreen() {
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Блок фильтрации с кнопкой и счетчиком показанных продуктов
+                    // ПРЯМОЙ ПОИСК БЛЮДА (например, "карбонара", "борщ")
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        placeholder = { Text("Поиск блюда (например: карбонара)", fontSize = 13.sp) },
+                        leadingIcon = {
+                            Icon(Icons.Default.Search, contentDescription = "Поиск", tint = Color(0xFF2E7D32), modifier = Modifier.size(20.dp))
+                        },
+                        trailingIcon = {
+                            if (searchQuery.isNotEmpty()) {
+                                IconButton(onClick = { searchQuery = "" }) {
+                                    Icon(Icons.Default.Clear, contentDescription = "Очистить поиск", modifier = Modifier.size(18.dp))
+                                }
+                            }
+                        },
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = Color(0xFF2E7D32),
+                            focusedLabelColor = Color(0xFF2E7D32)
+                        )
+                    )
+
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // Блок дополнительной фильтрации (исключение аллергенов) и счетчик
                     Surface(
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(8.dp),
                         color = Color(0xFFF1F8E9),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Column(modifier = Modifier.padding(10.dp)) {
+                        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -552,62 +580,58 @@ fun OrderMenuScreen() {
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    modifier = Modifier.clickable { isFilterExpanded = !isFilterExpanded }
+                                    modifier = Modifier.clickable { isExcludeFilterExpanded = !isExcludeFilterExpanded }
                                 ) {
                                     Icon(
-                                        imageVector = if (excludeFilterText.isNotEmpty()) Icons.Default.FilterList else Icons.Default.FilterList,
+                                        imageVector = Icons.Default.FilterList,
                                         contentDescription = null,
                                         tint = Color(0xFF2E7D32),
-                                        modifier = Modifier.size(20.dp)
+                                        modifier = Modifier.size(18.dp)
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = if (isFilterExpanded) "Скрыть фильтр" else "Фильтр продуктов",
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp,
+                                        text = if (isExcludeFilterExpanded) "Скрыть исключения" else "Исключить ингредиенты...",
+                                        fontWeight = FontWeight.Medium,
+                                        fontSize = 12.sp,
                                         color = Color(0xFF2E7D32)
                                     )
                                 }
 
-                                // Индикатор "выбрано X из Y продуктов"
+                                // Индикатор "Осталось X из Y блюд"
                                 Surface(
-                                    shape = RoundedCornerShape(12.dp),
+                                    shape = RoundedCornerShape(10.dp),
                                     color = if (filteredDishes.size < dishes.size) Color(0xFF2E7D32) else Color(0xFFE0E0E0)
                                 ) {
                                     Text(
-                                        text = "Выбрано: ${filteredDishes.size} из ${dishes.size}",
+                                        text = "${filteredDishes.size} из ${dishes.size}",
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = if (filteredDishes.size < dishes.size) Color.White else Color(0xFF424242),
-                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                     )
                                 }
                             }
 
-                            // Раскрывающаяся панель фильтра
-                            if (isFilterExpanded || excludeFilterText.isNotEmpty()) {
-                                Spacer(modifier = Modifier.height(8.dp))
+                            // Выпадающая панель исключения продуктов
+                            if (isExcludeFilterExpanded || excludeFilterText.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(6.dp))
                                 OutlinedTextField(
                                     value = excludeFilterText,
                                     onValueChange = { excludeFilterText = it },
                                     modifier = Modifier.fillMaxWidth(),
                                     singleLine = true,
-                                    placeholder = { Text("Исключить ингредиент (например: лук)", fontSize = 12.sp) },
-                                    leadingIcon = {
-                                        Icon(Icons.Default.Search, contentDescription = null, tint = Color(0xFF2E7D32), modifier = Modifier.size(18.dp))
-                                    },
+                                    placeholder = { Text("Исключить продукт (например: лук)", fontSize = 12.sp) },
                                     trailingIcon = {
                                         if (excludeFilterText.isNotEmpty()) {
                                             IconButton(onClick = { excludeFilterText = "" }) {
-                                                Icon(Icons.Default.Clear, contentDescription = "Очистить", modifier = Modifier.size(16.dp))
+                                                Icon(Icons.Default.Clear, contentDescription = "Сброс", modifier = Modifier.size(16.dp))
                                             }
                                         }
                                     }
                                 )
 
-                                Spacer(modifier = Modifier.height(6.dp))
+                                Spacer(modifier = Modifier.height(4.dp))
 
-                                // Быстрые фильтры частых нежелательных компонентов
                                 Row(
                                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                                     modifier = Modifier.horizontalScroll(rememberScrollState())
