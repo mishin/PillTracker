@@ -6,14 +6,18 @@ data class SheetInfo(
     val title: String
 )
 
-// Модель позиции блюда
+// Модель позиции блюда с детальной информацией о составе и пищевой ценности
 data class DishItem(
     val rowIndex: Int,
     val name: String,
     val price: Double,
     val category: String,
     val imageUrl: String = "",
-    val descriptionUrl: String = "https://www.nam-nyam.ru/menu-na-nedelu/"
+    val descriptionUrl: String = "https://www.nam-nyam.ru/menu-na-nedelu/",
+    val composition: String = "",
+    val minerals: String = "",
+    val vitamins: String = "",
+    val caloriesInfo: String = ""
 )
 
 // Элемент заказа

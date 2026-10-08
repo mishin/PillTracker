@@ -1,8 +1,6 @@
 package ru.namnyam.menu
 
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -29,6 +27,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import kotlinx.coroutines.launch
@@ -81,6 +80,10 @@ fun OrderMenuScreen() {
     val orderState = remember { mutableStateMapOf<Int, Int>() }
     val collapsedCategories = remember { mutableStateMapOf<String, Boolean>() }
 
+    // Состояния фильтра исключения ингредиентов и карточки просмотра блюда
+    var excludeFilterText by remember { mutableStateOf("") }
+    var selectedDishForDetails by remember { mutableStateOf<DishItem?>(null) }
+
     var isLoading by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showEmployeePicker by remember { mutableStateOf(false) }
@@ -114,17 +117,145 @@ fun OrderMenuScreen() {
         }
     }
 
-    // Вычисляем понятную дату для отображения над кнопками дня
+    // Вычисляем понятную дату для отображения
     val formattedDayDate = remember(selectedSheetTitle, dateHeader) {
         if (dateHeader.isNotEmpty()) {
             dateHeader
         } else {
-            // Например из 'ПН 12_10_2026' -> '12.10.2026'
             val match = Regex("""(\d{2})_(\d{2})_(\d{4})""").find(selectedSheetTitle)
             if (match != null) {
                 "${match.groupValues[1]}.${match.groupValues[2]}.${match.groupValues[3]} г."
             } else {
                 selectedSheetTitle
+            }
+        }
+    }
+
+    // Всплывающая карточка блюда (крупное фото, состав, КБЖУ, цена)
+    selectedDishForDetails?.let { dish ->
+        Dialog(onDismissRequest = { selectedDishForDetails = null }) {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(16.dp)
+                ) {
+                    // Верхняя строка с заголовком и кнопкой закрытия
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = dish.name.uppercase(),
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF212121),
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(onClick = { selectedDishForDetails = null }) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Закрыть",
+                                tint = Color(0xFF7CB342)
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    // Увеличенное изображение блюда
+                    AsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(dish.imageUrl)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = dish.name,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(210.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFFEEEEEE)),
+                        contentScale = ContentScale.Crop
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Состав
+                    if (dish.composition.isNotEmpty()) {
+                        Text(
+                            text = "Состав: ${dish.composition}",
+                            fontSize = 13.sp,
+                            color = Color(0xFF558B2F),
+                            lineHeight = 18.sp
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
+                    // Макро- и микроэлементы
+                    if (dish.minerals.isNotEmpty()) {
+                        Text(
+                            text = "Макро и микроэлементы: ${dish.minerals}",
+                            fontSize = 13.sp,
+                            color = Color(0xFF689F38)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
+                    // Витамины
+                    if (dish.vitamins.isNotEmpty()) {
+                        Text(
+                            text = "Витамины: ${dish.vitamins}",
+                            fontSize = 13.sp,
+                            color = Color(0xFF689F38)
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
+                    // Энергетическая ценность (КБЖУ)
+                    if (dish.caloriesInfo.isNotEmpty()) {
+                        Text(
+                            text = "Энергетическая ценность: ${dish.caloriesInfo}",
+                            fontSize = 13.sp,
+                            color = Color(0xFF689F38)
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                    }
+
+                    // Нижняя строка: стоимость и кнопка заказа
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "${dish.price.toInt()} руб.",
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF689F38)
+                        )
+
+                        val currentCount = orderState[dish.rowIndex] ?: 0
+                        OutlinedButton(
+                            onClick = {
+                                orderState[dish.rowIndex] = currentCount + 1
+                                Toast.makeText(context, "Добавлено: ${dish.name}", Toast.LENGTH_SHORT).show()
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF2E7D32))
+                        ) {
+                            Text("В корзину", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
             }
         }
     }
@@ -314,7 +445,6 @@ fun OrderMenuScreen() {
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Верхняя плашка выбора сотрудника и даты
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -356,7 +486,6 @@ fun OrderMenuScreen() {
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // Блок ДАТЫ над днем недели
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -373,7 +502,7 @@ fun OrderMenuScreen() {
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    // Кнопки дней недели
+                    // Переключатель дней недели
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -396,6 +525,27 @@ fun OrderMenuScreen() {
                             )
                         }
                     }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Поле фильтрации нежелательных продуктов (например: лук)
+                    OutlinedTextField(
+                        value = excludeFilterText,
+                        onValueChange = { excludeFilterText = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        placeholder = { Text("Исключить ингредиент (например: лук)", fontSize = 12.sp) },
+                        leadingIcon = {
+                            Icon(Icons.Default.FilterList, contentDescription = null, tint = Color(0xFF2E7D32), modifier = Modifier.size(18.dp))
+                        },
+                        trailingIcon = {
+                            if (excludeFilterText.isNotEmpty()) {
+                                IconButton(onClick = { excludeFilterText = "" }) {
+                                    Icon(Icons.Default.Clear, contentDescription = "Очистить фильтр", modifier = Modifier.size(16.dp))
+                                }
+                            }
+                        }
+                    )
                 }
             }
 
@@ -404,7 +554,20 @@ fun OrderMenuScreen() {
                     CircularProgressIndicator(color = Color(0xFF2E7D32))
                 }
             } else {
-                val groupedDishes = remember(dishes) { dishes.groupBy { it.category } }
+                // Применение фильтрации по исключаемым продуктам
+                val filteredDishes = remember(dishes, excludeFilterText) {
+                    val filterTrimmed = excludeFilterText.trim().lowercase()
+                    if (filterTrimmed.isEmpty()) {
+                        dishes
+                    } else {
+                        dishes.filterNot { dish ->
+                            dish.name.lowercase().contains(filterTrimmed) ||
+                            dish.composition.lowercase().contains(filterTrimmed)
+                        }
+                    }
+                }
+
+                val groupedDishes = remember(filteredDishes) { filteredDishes.groupBy { it.category } }
 
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
@@ -469,6 +632,7 @@ fun OrderMenuScreen() {
                                             .fillMaxWidth(),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
+                                        // Клик по картинке открывает подробную карточку блюда
                                         AsyncImage(
                                             model = ImageRequest.Builder(context)
                                                 .data(dish.imageUrl)
@@ -480,15 +644,20 @@ fun OrderMenuScreen() {
                                                 .clip(RoundedCornerShape(8.dp))
                                                 .background(Color(0xFFE0E0E0))
                                                 .clickable {
-                                                    val i = Intent(Intent.ACTION_VIEW, Uri.parse(dish.descriptionUrl))
-                                                    context.startActivity(i)
+                                                    selectedDishForDetails = dish
                                                 },
                                             contentScale = ContentScale.Crop
                                         )
 
                                         Spacer(modifier = Modifier.width(10.dp))
 
-                                        Column(modifier = Modifier.weight(1f)) {
+                                        Column(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clickable {
+                                                    selectedDishForDetails = dish
+                                                }
+                                        ) {
                                             Text(dish.name, fontSize = 13.sp, fontWeight = FontWeight.Medium)
                                             Text(
                                                 "${dish.price.toInt()} ₽",
