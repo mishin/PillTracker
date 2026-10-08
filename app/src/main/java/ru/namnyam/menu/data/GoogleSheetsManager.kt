@@ -92,7 +92,6 @@ object GoogleSheetsManager {
         NamNyamScraper.fetchMenuImages(context)
 
         val empColLetter = getColumnLetter(employeeNumber + 2)
-        // Увеличен диапазон до 350 строк, чтобы захватывать комплексные обеды в конце таблицы
         val readRange = "'$sheetTitle'!A1:${empColLetter}350"
 
         try {
@@ -121,7 +120,6 @@ object GoogleSheetsManager {
                 val row = rows[rowIndex]
                 val name = row.getOrNull(0)?.toString()?.trim() ?: ""
 
-                // Нормализация цены: очистка от символов валюты, пробелов и запятых
                 val priceRaw = row.getOrNull(1)?.toString()
                     ?.replace("руб", "", ignoreCase = true)
                     ?.replace("р.", "", ignoreCase = true)
@@ -134,16 +132,41 @@ object GoogleSheetsManager {
 
                 if (name.isNotEmpty()) {
                     val price = priceRaw.toDoubleOrNull()
+                    val lower = name.lowercase()
+
+                    // Проверка: это строка-заголовок секции "Комплексное меню"
+                    if (lower.contains("комплексное меню") || lower.contains("комплексные обеды")) {
+                        currentCategory = "Комплексное меню"
+                        continue
+                    }
+
                     if (price == null || price == 0.0) {
-                        // Строка категории (включая "Комплексные обеды" и "Бизнес-ланчи")
-                        val lower = name.lowercase()
+                        // Если мы находимся внутри "Комплексного меню", то строки без цены - это состав предыдущего комплекса!
+                        if (currentCategory == "Комплексное меню" && dishes.isNotEmpty()) {
+                            val lastIndex = dishes.size - 1
+                            val lastDish = dishes[lastIndex]
+                            if (lastDish.category == "Комплексное меню") {
+                                val newComposition = if (lastDish.composition.isEmpty()) {
+                                    name
+                                } else {
+                                    "${lastDish.composition}\n$name"
+                                }
+                                dishes[lastIndex] = lastDish.copy(composition = newComposition)
+                                continue
+                            }
+                        }
+
+                        // Иначе это обычный заголовок категории
                         if (!lower.contains("наименование") && !lower.contains("итого:") && !lower.contains("стоимость")) {
                             currentCategory = name
                         }
                     } else {
-                        // Полноценная позиция блюда или комплексного меню
+                        // Блюдо или комплекс с ценой
+                        val isCombo = currentCategory == "Комплексное меню" || lower.contains("комплекс")
+                        val actualCat = if (isCombo) "Комплексное меню" else currentCategory
+
                         val scrapedDetails = NamNyamScraper.findDetailsForDish(name)
-                        val realImageUrl = scrapedDetails?.imageUrl ?: resolveFallbackImage(name, currentCategory)
+                        val realImageUrl = scrapedDetails?.imageUrl ?: resolveFallbackImage(name, actualCat)
                         val details = resolveDishMetadata(name, scrapedDetails)
 
                         dishes.add(
@@ -151,11 +174,11 @@ object GoogleSheetsManager {
                                 rowIndex = actualRowNum,
                                 name = name,
                                 price = price,
-                                category = currentCategory,
+                                category = actualCat,
                                 imageUrl = realImageUrl,
                                 composition = details.composition,
-                                minerals = details.minerals,
-                                vitamins = details.vitamins,
+                                minerals = if (isCombo) "" else details.minerals,
+                                vitamins = if (isCombo) "" else details.vitamins,
                                 caloriesInfo = details.caloriesInfo
                             )
                         )
@@ -269,13 +292,6 @@ object GoogleSheetsManager {
     private fun resolveDishMetadata(name: String, scraped: ScrapedDishDetails?): ScrapedDishDetails {
         val lower = name.lowercase()
         return when {
-            lower.contains("комплекс") -> ScrapedDishDetails(
-                imageUrl = scraped?.imageUrl ?: "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=600&q=80",
-                composition = "Сбалансированный комплексный обед: салат, первое блюдо, горячее блюдо и хлеб",
-                minerals = "Ca, Fe, Mg, P, K",
-                vitamins = "A, B1, B2, C",
-                caloriesInfo = "580 ккал; Жиры: 22; Белки: 26; Углеводы: 68"
-            )
             lower.contains("морков") && lower.contains("корейск") -> ScrapedDishDetails(
                 imageUrl = scraped?.imageUrl ?: "",
                 composition = "Морковь, масло подсолнечное, сахар, уксус, соль, чеснок, перец, кунжут, кориандр",
@@ -307,10 +323,10 @@ object GoogleSheetsManager {
             scraped != null && scraped.composition.isNotEmpty() -> scraped
             else -> ScrapedDishDetails(
                 imageUrl = scraped?.imageUrl ?: "",
-                composition = "Основные ингредиенты рецептуры блюда: $name",
-                minerals = "K, Ca, Mg, Na",
-                vitamins = "A, B, C",
-                caloriesInfo = "180 ккал; Жиры: 8; Белки: 6; Углеводы: 20"
+                composition = "",
+                minerals = "",
+                vitamins = "",
+                caloriesInfo = ""
             )
         }
     }
@@ -318,7 +334,7 @@ object GoogleSheetsManager {
     private fun resolveFallbackImage(dishName: String, category: String): String {
         val lower = dishName.lowercase()
         return when {
-            lower.contains("комплекс") -> "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&q=80"
+            category.contains("Комплекс") || lower.contains("комплекс") -> "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&q=80"
             lower.contains("морковь") -> "https://images.unsplash.com/photo-1598170845058-32b9d6a5da37?w=300&q=80"
             lower.contains("винегрет") -> "https://images.unsplash.com/photo-1540420773420-3366772f4999?w=300&q=80"
             lower.contains("борщ") -> "https://images.unsplash.com/photo-1547592166-23ac45744acd?w=300&q=80"

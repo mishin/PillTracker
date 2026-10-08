@@ -105,7 +105,6 @@ fun OrderMenuScreen() {
     val orderState = remember { mutableStateMapOf<Int, Int>() }
     val collapsedCategories = remember { mutableStateMapOf<String, Boolean>() }
 
-    // Состояния фильтрации и видимости блоков
     var isFiltersVisible by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var excludeFilterText by remember { mutableStateOf("") }
@@ -131,7 +130,6 @@ fun OrderMenuScreen() {
         else -> Color(0xFF2E7D32)
     }
 
-    // Загрузка листов таблицы
     LaunchedEffect(spreadsheetId) {
         isLoading = true
         val sheets = GoogleSheetsManager.getSheetTitles(context, spreadsheetId)
@@ -142,7 +140,6 @@ fun OrderMenuScreen() {
         isLoading = false
     }
 
-    // Загрузка меню (сначала локальный кэш, затем сеть)
     LaunchedEffect(selectedSheetTitle, employeeNumber) {
         if (selectedSheetTitle.isNotEmpty()) {
             val cached = OrderStorage.loadMenuCache(context, selectedSheetTitle)
@@ -179,7 +176,6 @@ fun OrderMenuScreen() {
         }
     }
 
-    // Фильтрация
     val filteredDishes = remember(dishes, searchQuery, excludeFilterText, showOnlyOrdered, orderState.toMap()) {
         val query = searchQuery.trim().lowercase()
         val exclude = excludeFilterText.trim().lowercase()
@@ -198,7 +194,6 @@ fun OrderMenuScreen() {
         }
     }
 
-    // Список выбранных блюд
     val selectedDishesSummary = remember(dishes, orderState.toMap()) {
         dishes.mapNotNull { dish ->
             val count = orderState[dish.rowIndex] ?: 0
@@ -206,7 +201,119 @@ fun OrderMenuScreen() {
         }
     }
 
-    // Сводка заказа перед сохранением (ModalBottomSheet)
+    // Детальный просмотр блюда / комплекса
+    selectedDishForDetails?.let { dish ->
+        Dialog(onDismissRequest = { selectedDishForDetails = null }) {
+            Card(
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                elevation = CardDefaults.cardElevation(8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(8.dp)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(16.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = dish.category.uppercase(),
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF2E7D32)
+                            )
+                            Text(
+                                text = dish.name,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF212121)
+                            )
+                        }
+                        IconButton(onClick = { selectedDishForDetails = null }) {
+                            Icon(Icons.Default.Close, contentDescription = "Закрыть", tint = Color.Gray)
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(10.dp))
+
+                    AsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(dish.imageUrl)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = dish.name,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFFEEEEEE)),
+                        contentScale = ContentScale.Crop
+                    )
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    if (dish.composition.isNotEmpty()) {
+                        Text(
+                            text = if (dish.category.contains("Комплекс")) "Состав комплекса:" else "Состав блюда:",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color(0xFF2E7D32)
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = dish.composition,
+                            fontSize = 13.sp,
+                            color = Color(0xFF424242),
+                            lineHeight = 19.sp
+                        )
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+
+                    if (dish.minerals.isNotEmpty()) {
+                        Text(text = "Макро и микроэлементы: ${dish.minerals}", fontSize = 12.sp, color = Color(0xFF689F38))
+                        Spacer(modifier = Modifier.height(4.dp))
+                    }
+                    if (dish.vitamins.isNotEmpty()) {
+                        Text(text = "Витамины: ${dish.vitamins}", fontSize = 12.sp, color = Color(0xFF689F38))
+                        Spacer(modifier = Modifier.height(4.dp))
+                    }
+                    if (dish.caloriesInfo.isNotEmpty()) {
+                        Text(text = "Энергетическая ценность: ${dish.caloriesInfo}", fontSize = 12.sp, color = Color(0xFF689F38))
+                        Spacer(modifier = Modifier.height(12.dp))
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(text = "${dish.price.toInt()} руб.", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color(0xFF2E7D32))
+                        val currentCount = orderState[dish.rowIndex] ?: 0
+                        OutlinedButton(
+                            onClick = {
+                                orderState[dish.rowIndex] = currentCount + 1
+                                Toast.makeText(context, "Добавлено в заказ", Toast.LENGTH_SHORT).show()
+                            },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF2E7D32))
+                        ) {
+                            Text("В корзину", fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Сводка заказа перед отправкой
     if (showOrderSummarySheet) {
         ModalBottomSheet(
             onDismissRequest = { showOrderSummarySheet = false }
@@ -352,18 +459,17 @@ fun OrderMenuScreen() {
         }
     }
 
-    // Диалог подтверждения очистки заказа
     if (showClearConfirmDialog) {
         AlertDialog(
             onDismissRequest = { showClearConfirmDialog = false },
             title = { Text("Очистить текущий выбор?") },
-            text = { Text("Все выбранные блюда ($totalCount шт.) будут сброшены. Чтобы удалить заказ и из Google Таблицы, нажмите «Сохранить» после сброса.") },
+            text = { Text("Все выбранные блюда ($totalCount шт.) будут сброшены. Чтобы удалить заказ и из Google Таблицы, нажмите «Обнулить» после сброса.") },
             confirmButton = {
                 Button(
                     onClick = {
                         orderState.clear()
                         showClearConfirmDialog = false
-                        Toast.makeText(context, "Выбор сброшен. Нажмите 'Сохранить', чтобы обнулить в таблице", Toast.LENGTH_LONG).show()
+                        Toast.makeText(context, "Выбор сброшен. Нажмите 'Обнулить', чтобы обновить таблицу", Toast.LENGTH_LONG).show()
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
                 ) {
@@ -378,99 +484,6 @@ fun OrderMenuScreen() {
         )
     }
 
-    // Диалог подробностей блюда
-    selectedDishForDetails?.let { dish ->
-        Dialog(onDismissRequest = { selectedDishForDetails = null }) {
-            Card(
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.White),
-                elevation = CardDefaults.cardElevation(8.dp),
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp)
-            ) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                        .padding(16.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            text = dish.name.uppercase(),
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color(0xFF212121),
-                            modifier = Modifier.weight(1f)
-                        )
-                        IconButton(onClick = { selectedDishForDetails = null }) {
-                            Icon(Icons.Default.Close, contentDescription = "Закрыть", tint = Color(0xFF7CB342))
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
-
-                    AsyncImage(
-                        model = ImageRequest.Builder(context)
-                            .data(dish.imageUrl)
-                            .crossfade(true)
-                            .build(),
-                        contentDescription = dish.name,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(210.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Color(0xFFEEEEEE)),
-                        contentScale = ContentScale.Crop
-                    )
-
-                    Spacer(modifier = Modifier.height(14.dp))
-
-                    if (dish.composition.isNotEmpty()) {
-                        Text(text = "Состав: ${dish.composition}", fontSize = 13.sp, color = Color(0xFF558B2F), lineHeight = 18.sp)
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-                    if (dish.minerals.isNotEmpty()) {
-                        Text(text = "Макро и микроэлементы: ${dish.minerals}", fontSize = 13.sp, color = Color(0xFF689F38))
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-                    if (dish.vitamins.isNotEmpty()) {
-                        Text(text = "Витамины: ${dish.vitamins}", fontSize = 13.sp, color = Color(0xFF689F38))
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-                    if (dish.caloriesInfo.isNotEmpty()) {
-                        Text(text = "Энергетическая ценность: ${dish.caloriesInfo}", fontSize = 13.sp, color = Color(0xFF689F38))
-                        Spacer(modifier = Modifier.height(14.dp))
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(text = "${dish.price.toInt()} руб.", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color(0xFF689F38))
-                        val currentCount = orderState[dish.rowIndex] ?: 0
-                        OutlinedButton(
-                            onClick = {
-                                orderState[dish.rowIndex] = currentCount + 1
-                                Toast.makeText(context, "Добавлено: ${dish.name}", Toast.LENGTH_SHORT).show()
-                            },
-                            shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF2E7D32))
-                        ) {
-                            Text("В корзину", fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Диалог логов
     if (showLogDialog) {
         AlertDialog(
             onDismissRequest = { showLogDialog = false },
@@ -515,7 +528,6 @@ fun OrderMenuScreen() {
         )
     }
 
-    // Диалог настроек таблицы
     if (showSettingsDialog) {
         var tempUrl by remember { mutableStateOf(tableUrl) }
         AlertDialog(
@@ -621,7 +633,6 @@ fun OrderMenuScreen() {
                                 }
                             }
 
-                            // Кнопка активна ВСЕГДА, пока нет процесса загрузки (позволяет отправить и пустой заказ)
                             Button(
                                 onClick = { showOrderSummarySheet = true },
                                 enabled = !isLoading,
