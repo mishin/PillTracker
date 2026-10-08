@@ -75,10 +75,11 @@ object GoogleSheetsManager {
         employeeNumber: Int
     ): DayMenuResult = withContext(Dispatchers.IO) {
         val service = sheetsService ?: return@withContext DayMenuResult()
-        
+
         // Колонка A=1 (Блюдо), B=2 (Цена), Сотрудник N = N + 2
         val empColLetter = getColumnLetter(employeeNumber + 2)
-        val readRange = "'$sheetTitle'!A1:$empColLetter150"
+        // Исправлена интерполяция строки: ${empColLetter}150 вместо $empColLetter150
+        val readRange = "'$sheetTitle'!A1:${empColLetter}150"
 
         try {
             val response = service.spreadsheets().values()
