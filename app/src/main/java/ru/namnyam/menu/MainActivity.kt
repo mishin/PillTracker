@@ -7,6 +7,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -80,8 +81,9 @@ fun OrderMenuScreen() {
     val orderState = remember { mutableStateMapOf<Int, Int>() }
     val collapsedCategories = remember { mutableStateMapOf<String, Boolean>() }
 
-    // Состояния фильтра исключения ингредиентов и карточки просмотра блюда
+    // Состояния фильтра исключения ингредиентов
     var excludeFilterText by remember { mutableStateOf("") }
+    var isFilterExpanded by remember { mutableStateOf(false) }
     var selectedDishForDetails by remember { mutableStateOf<DishItem?>(null) }
 
     var isLoading by remember { mutableStateOf(false) }
@@ -93,7 +95,7 @@ fun OrderMenuScreen() {
     val totalSum = dishes.sumOf { (orderState[it.rowIndex] ?: 0) * it.price }
     val budgetLimit = 600.0
 
-    // Загрузка листов таблицы
+    // Загрузка доступных листов из Google Таблицы
     LaunchedEffect(spreadsheetId) {
         isLoading = true
         val sheets = GoogleSheetsManager.getSheetTitles(context, spreadsheetId)
@@ -104,7 +106,7 @@ fun OrderMenuScreen() {
         isLoading = false
     }
 
-    // Загрузка меню и заказов
+    // Загрузка блюд и ранее проставленных заказов выбранного дня
     LaunchedEffect(selectedSheetTitle, employeeNumber) {
         if (selectedSheetTitle.isNotEmpty()) {
             isLoading = true
@@ -117,7 +119,7 @@ fun OrderMenuScreen() {
         }
     }
 
-    // Вычисляем понятную дату для отображения
+    // Вычисление читаемой даты для заголовка
     val formattedDayDate = remember(selectedSheetTitle, dateHeader) {
         if (dateHeader.isNotEmpty()) {
             dateHeader
@@ -131,7 +133,20 @@ fun OrderMenuScreen() {
         }
     }
 
-    // Всплывающая карточка блюда (крупное фото, состав, КБЖУ, цена)
+    // Фильтрация списка блюд по нежелательным ингредиентам
+    val filteredDishes = remember(dishes, excludeFilterText) {
+        val filterTrimmed = excludeFilterText.trim().lowercase()
+        if (filterTrimmed.isEmpty()) {
+            dishes
+        } else {
+            dishes.filterNot { dish ->
+                dish.name.lowercase().contains(filterTrimmed) ||
+                dish.composition.lowercase().contains(filterTrimmed)
+            }
+        }
+    }
+
+    // Модальная карточка блюда (крупное фото, состав, КБЖУ, цена)
     selectedDishForDetails?.let { dish ->
         Dialog(onDismissRequest = { selectedDishForDetails = null }) {
             Card(
@@ -148,7 +163,6 @@ fun OrderMenuScreen() {
                         .verticalScroll(rememberScrollState())
                         .padding(16.dp)
                 ) {
-                    // Верхняя строка с заголовком и кнопкой закрытия
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -172,7 +186,6 @@ fun OrderMenuScreen() {
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Увеличенное изображение блюда
                     AsyncImage(
                         model = ImageRequest.Builder(context)
                             .data(dish.imageUrl)
@@ -189,7 +202,6 @@ fun OrderMenuScreen() {
 
                     Spacer(modifier = Modifier.height(14.dp))
 
-                    // Состав
                     if (dish.composition.isNotEmpty()) {
                         Text(
                             text = "Состав: ${dish.composition}",
@@ -200,7 +212,6 @@ fun OrderMenuScreen() {
                         Spacer(modifier = Modifier.height(8.dp))
                     }
 
-                    // Макро- и микроэлементы
                     if (dish.minerals.isNotEmpty()) {
                         Text(
                             text = "Макро и микроэлементы: ${dish.minerals}",
@@ -210,7 +221,6 @@ fun OrderMenuScreen() {
                         Spacer(modifier = Modifier.height(8.dp))
                     }
 
-                    // Витамины
                     if (dish.vitamins.isNotEmpty()) {
                         Text(
                             text = "Витамины: ${dish.vitamins}",
@@ -220,7 +230,6 @@ fun OrderMenuScreen() {
                         Spacer(modifier = Modifier.height(8.dp))
                     }
 
-                    // Энергетическая ценность (КБЖУ)
                     if (dish.caloriesInfo.isNotEmpty()) {
                         Text(
                             text = "Энергетическая ценность: ${dish.caloriesInfo}",
@@ -230,7 +239,6 @@ fun OrderMenuScreen() {
                         Spacer(modifier = Modifier.height(14.dp))
                     }
 
-                    // Нижняя строка: стоимость и кнопка заказа
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -260,7 +268,7 @@ fun OrderMenuScreen() {
         }
     }
 
-    // Диалог логов
+    // Диалог системных логов
     if (showLogDialog) {
         AlertDialog(
             onDismissRequest = { showLogDialog = false },
@@ -317,7 +325,7 @@ fun OrderMenuScreen() {
         )
     }
 
-    // Диалог настройки URL таблицы
+    // Диалог смены адреса Google Таблицы
     if (showSettingsDialog) {
         var tempUrl by remember { mutableStateOf(tableUrl) }
         AlertDialog(
@@ -500,14 +508,16 @@ fun OrderMenuScreen() {
                         )
                     }
 
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(6.dp))
 
-                    // Переключатель дней недели
+                    // Горизонтальный скролл для дней недели (гарантирует видимость всех дней: ПН, ВТ, СР, ЧТ, ПТ)
+                    val daysScrollState = rememberScrollState()
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 2.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            .horizontalScroll(daysScrollState)
+                            .padding(vertical = 2.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         availableSheets.forEach { sheet: SheetInfo ->
                             val match = Regex("""(\d{2})_(\d{2})""").find(sheet.title)
@@ -521,31 +531,101 @@ fun OrderMenuScreen() {
                             FilterChip(
                                 selected = selectedSheetTitle == sheet.title,
                                 onClick = { selectedSheetTitle = sheet.title },
-                                label = { Text(shortLabel, fontSize = 11.sp, fontWeight = FontWeight.Medium) }
+                                label = { Text(shortLabel, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
                             )
                         }
                     }
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Поле фильтрации нежелательных продуктов (например: лук)
-                    OutlinedTextField(
-                        value = excludeFilterText,
-                        onValueChange = { excludeFilterText = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        placeholder = { Text("Исключить ингредиент (например: лук)", fontSize = 12.sp) },
-                        leadingIcon = {
-                            Icon(Icons.Default.FilterList, contentDescription = null, tint = Color(0xFF2E7D32), modifier = Modifier.size(18.dp))
-                        },
-                        trailingIcon = {
-                            if (excludeFilterText.isNotEmpty()) {
-                                IconButton(onClick = { excludeFilterText = "" }) {
-                                    Icon(Icons.Default.Clear, contentDescription = "Очистить фильтр", modifier = Modifier.size(16.dp))
+                    // Блок фильтрации с кнопкой и счетчиком показанных продуктов
+                    Surface(
+                        shape = RoundedCornerShape(10.dp),
+                        color = Color(0xFFF1F8E9),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(10.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.clickable { isFilterExpanded = !isFilterExpanded }
+                                ) {
+                                    Icon(
+                                        imageVector = if (excludeFilterText.isNotEmpty()) Icons.Default.FilterAlt else Icons.Default.FilterAltOutlined,
+                                        contentDescription = null,
+                                        tint = Color(0xFF2E7D32),
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (isFilterExpanded) "Скрыть фильтр" else "Фильтр продуктов",
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp,
+                                        color = Color(0xFF2E7D32)
+                                    )
+                                }
+
+                                // Индикатор "выбрано X из Y продуктов"
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    color = if (filteredDishes.size < dishes.size) Color(0xFF2E7D32) else Color(0xFFE0E0E0)
+                                ) {
+                                    Text(
+                                        text = "Выбрано: ${filteredDishes.size} из ${dishes.size}",
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (filteredDishes.size < dishes.size) Color.White else Color(0xFF424242),
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+
+                            // Раскрывающаяся панель фильтра
+                            if (isFilterExpanded || excludeFilterText.isNotEmpty()) {
+                                Spacer(modifier = Modifier.height(8.dp))
+                                OutlinedTextField(
+                                    value = excludeFilterText,
+                                    onValueChange = { excludeFilterText = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    singleLine = true,
+                                    placeholder = { Text("Исключить ингредиент (например: лук)", fontSize = 12.sp) },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Search, contentDescription = null, tint = Color(0xFF2E7D32), modifier = Modifier.size(18.dp))
+                                    },
+                                    trailingIcon = {
+                                        if (excludeFilterText.isNotEmpty()) {
+                                            IconButton(onClick = { excludeFilterText = "" }) {
+                                                Icon(Icons.Default.Clear, contentDescription = "Очистить", modifier = Modifier.size(16.dp))
+                                            }
+                                        }
+                                    }
+                                )
+
+                                Spacer(modifier = Modifier.height(6.dp))
+
+                                // Быстрые фильтры частых нежелательных компонентов
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    modifier = Modifier.horizontalScroll(rememberScrollState())
+                                ) {
+                                    listOf("лук", "чеснок", "перец", "мясо").forEach { allergen ->
+                                        val isSelected = excludeFilterText.equals(allergen, ignoreCase = true)
+                                        FilterChip(
+                                            selected = isSelected,
+                                            onClick = {
+                                                excludeFilterText = if (isSelected) "" else allergen
+                                            },
+                                            label = { Text("Без $allergen", fontSize = 11.sp) }
+                                        )
+                                    }
                                 }
                             }
                         }
-                    )
+                    }
                 }
             }
 
@@ -554,19 +634,6 @@ fun OrderMenuScreen() {
                     CircularProgressIndicator(color = Color(0xFF2E7D32))
                 }
             } else {
-                // Применение фильтрации по исключаемым продуктам
-                val filteredDishes = remember(dishes, excludeFilterText) {
-                    val filterTrimmed = excludeFilterText.trim().lowercase()
-                    if (filterTrimmed.isEmpty()) {
-                        dishes
-                    } else {
-                        dishes.filterNot { dish ->
-                            dish.name.lowercase().contains(filterTrimmed) ||
-                            dish.composition.lowercase().contains(filterTrimmed)
-                        }
-                    }
-                }
-
                 val groupedDishes = remember(filteredDishes) { filteredDishes.groupBy { it.category } }
 
                 LazyColumn(
@@ -604,6 +671,12 @@ fun OrderMenuScreen() {
                                         fontSize = 14.sp,
                                         modifier = Modifier.weight(1f)
                                     )
+                                    Text(
+                                        "${categoryDishes.size}",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray,
+                                        modifier = Modifier.padding(end = 6.dp)
+                                    )
                                     if (categoryOrderedCount > 0) {
                                         Badge(containerColor = Color(0xFF2E7D32)) {
                                             Text("$categoryOrderedCount", color = Color.White)
@@ -632,7 +705,6 @@ fun OrderMenuScreen() {
                                             .fillMaxWidth(),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        // Клик по картинке открывает подробную карточку блюда
                                         AsyncImage(
                                             model = ImageRequest.Builder(context)
                                                 .data(dish.imageUrl)
