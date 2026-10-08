@@ -112,7 +112,7 @@ fun OrderMenuScreen() {
     var showOnlyOrdered by remember { mutableStateOf(false) }
     var selectedDishForDetails by remember { mutableStateOf<DishItem?>(null) }
     var showClearConfirmDialog by remember { mutableStateOf(false) }
-    var showOrderSummarySheet by remember { mutableStateOf(false) } // Нижняя шторка подтверждения
+    var showOrderSummarySheet by remember { mutableStateOf(false) }
 
     var isLoading by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
@@ -124,12 +124,11 @@ fun OrderMenuScreen() {
     val totalCount = dishes.sumOf { orderState[it.rowIndex] ?: 0 }
     val budgetLimit = 600.0
 
-    // Прогресс бюджета и динамический цвет (Зеленый -> Желтый -> Красный)
     val budgetProgress = (totalSum / budgetLimit).toFloat().coerceIn(0f, 1f)
     val budgetIndicatorColor = when {
-        totalSum > budgetLimit -> Color(0xFFD32F2F) // Красный при перерасходе
-        totalSum > 450.0 -> Color(0xFFFF9800)       // Желтый/Оранжевый при приближении к лимиту
-        else -> Color(0xFF2E7D32)                   // Зеленый
+        totalSum > budgetLimit -> Color(0xFFD32F2F)
+        totalSum > 450.0 -> Color(0xFFFF9800)
+        else -> Color(0xFF2E7D32)
     }
 
     // Загрузка листов таблицы
@@ -180,7 +179,7 @@ fun OrderMenuScreen() {
         }
     }
 
-    // Комплексная фильтрация
+    // Фильтрация
     val filteredDishes = remember(dishes, searchQuery, excludeFilterText, showOnlyOrdered, orderState.toMap()) {
         val query = searchQuery.trim().lowercase()
         val exclude = excludeFilterText.trim().lowercase()
@@ -199,7 +198,7 @@ fun OrderMenuScreen() {
         }
     }
 
-    // Список фактически выбранных блюд для сводки заказа
+    // Список выбранных блюд
     val selectedDishesSummary = remember(dishes, orderState.toMap()) {
         dishes.mapNotNull { dish ->
             val count = orderState[dish.rowIndex] ?: 0
@@ -223,7 +222,7 @@ fun OrderMenuScreen() {
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Сводка заказа",
+                        text = if (totalCount > 0) "Сводка заказа" else "Обнуление заказа",
                         fontSize = 19.sp,
                         fontWeight = FontWeight.Bold
                     )
@@ -238,11 +237,26 @@ fun OrderMenuScreen() {
                 Spacer(modifier = Modifier.height(12.dp))
 
                 if (selectedDishesSummary.isEmpty()) {
-                    Text(
-                        text = "Вы пока не выбрали ни одного блюда.",
-                        color = Color.Gray,
-                        modifier = Modifier.padding(vertical = 16.dp)
-                    )
+                    Surface(
+                        color = Color(0xFFFFEBEE),
+                        shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(
+                                text = "⚠️ В заказе не выбрано ни одного блюда.",
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFFC62828),
+                                fontSize = 14.sp
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "При сохранении колонка сотрудника №$employeeNumber в таблице будет очищена.",
+                                color = Color(0xFF555555),
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
                 } else {
                     Column(
                         modifier = Modifier
@@ -310,7 +324,8 @@ fun OrderMenuScreen() {
                             isLoading = false
                             if (success) {
                                 OrderStorage.saveOrderTemplate(context, employeeNumber, selectedSheetTitle, orderState)
-                                Toast.makeText(context, "✅ Заказ сохранен в таблице!", Toast.LENGTH_SHORT).show()
+                                val okMsg = if (totalCount > 0) "✅ Заказ сохранен в таблице!" else "✅ Заказ успешно обнулен в таблице!"
+                                Toast.makeText(context, okMsg, Toast.LENGTH_SHORT).show()
                             } else {
                                 Toast.makeText(context, "❌ $message (см. Лог 📝)", Toast.LENGTH_LONG).show()
                                 logContent = AppLogger.readLog(context)
@@ -319,11 +334,17 @@ fun OrderMenuScreen() {
                         }
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (totalCount > 0) Color(0xFF2E7D32) else Color(0xFFD32F2F)
+                    )
                 ) {
-                    Icon(Icons.Default.Check, null, modifier = Modifier.size(18.dp))
+                    Icon(
+                        if (totalCount > 0) Icons.Default.Check else Icons.Default.DeleteSweep,
+                        null,
+                        modifier = Modifier.size(18.dp)
+                    )
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("Подтвердить и отправить")
+                    Text(if (totalCount > 0) "Подтвердить и отправить" else "Обнулить заказ в таблице")
                 }
 
                 Spacer(modifier = Modifier.height(10.dp))
@@ -335,18 +356,18 @@ fun OrderMenuScreen() {
     if (showClearConfirmDialog) {
         AlertDialog(
             onDismissRequest = { showClearConfirmDialog = false },
-            title = { Text("Очистить текущий заказ?") },
-            text = { Text("Все выбранные блюда ($totalCount шт.) будут удалены из вашего выбора.") },
+            title = { Text("Очистить текущий выбор?") },
+            text = { Text("Все выбранные блюда ($totalCount шт.) будут сброшены. Чтобы удалить заказ и из Google Таблицы, нажмите «Сохранить» после сброса.") },
             confirmButton = {
                 Button(
                     onClick = {
                         orderState.clear()
                         showClearConfirmDialog = false
-                        Toast.makeText(context, "Заказ очищен", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Выбор сброшен. Нажмите 'Сохранить', чтобы обнулить в таблице", Toast.LENGTH_LONG).show()
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color.Red)
                 ) {
-                    Text("Очистить")
+                    Text("Сбросить")
                 }
             },
             dismissButton = {
@@ -559,7 +580,6 @@ fun OrderMenuScreen() {
         bottomBar = {
             Surface(shadowElevation = 8.dp, color = Color.White) {
                 Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    // Индикатор прогресса бюджета: Зеленый -> Желтый -> Красный
                     LinearProgressIndicator(
                         progress = budgetProgress,
                         modifier = Modifier
@@ -597,17 +617,19 @@ fun OrderMenuScreen() {
                                     onClick = { showClearConfirmDialog = true },
                                     modifier = Modifier.padding(end = 4.dp)
                                 ) {
-                                    Icon(Icons.Default.DeleteOutline, contentDescription = "Очистить заказ", tint = Color.Red)
+                                    Icon(Icons.Default.DeleteOutline, contentDescription = "Очистить выбор", tint = Color.Red)
                                 }
                             }
 
-                            // Кнопка открывает сводку заказа перед отправкой в таблицу
+                            // Кнопка активна ВСЕГДА, пока нет процесса загрузки (позволяет отправить и пустой заказ)
                             Button(
                                 onClick = { showOrderSummarySheet = true },
-                                enabled = !isLoading && totalCount > 0,
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+                                enabled = !isLoading,
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (totalCount > 0) Color(0xFF2E7D32) else Color(0xFFD32F2F)
+                                )
                             ) {
-                                Text("Сохранить")
+                                Text(if (totalCount > 0) "Сохранить" else "Обнулить")
                             }
                         }
                     }
@@ -661,7 +683,6 @@ fun OrderMenuScreen() {
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    // Дни недели со скроллом
                     val daysScrollState = rememberScrollState()
                     Row(
                         modifier = Modifier
@@ -689,7 +710,6 @@ fun OrderMenuScreen() {
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // Панель умных действий
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -760,7 +780,6 @@ fun OrderMenuScreen() {
                         }
                     }
 
-                    // Анимированный сворачиваемый блок фильтрации и поиска
                     AnimatedVisibility(
                         visible = isFiltersVisible,
                         enter = fadeIn() + expandVertically(),
@@ -865,7 +884,6 @@ fun OrderMenuScreen() {
             } else {
                 val groupedDishes = remember(filteredDishes) { filteredDishes.groupBy { it.category } }
 
-                // Панель быстрого управления категориями ("Свернуть все" / "Развернуть все")
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
