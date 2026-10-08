@@ -59,7 +59,6 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         GoogleSheetsManager.initCredentials(applicationContext)
 
-        // Запуск ежедневного напоминания в 10:30 утра[cite: 8]
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                 requestNotificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -107,12 +106,13 @@ fun OrderMenuScreen() {
     val collapsedCategories = remember { mutableStateMapOf<String, Boolean>() }
 
     // Состояния фильтрации и видимости блоков
-    var isFiltersVisible by remember { mutableStateOf(false) } // Показ/скрытие фильтров
+    var isFiltersVisible by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var excludeFilterText by remember { mutableStateOf("") }
     var showOnlyOrdered by remember { mutableStateOf(false) }
     var selectedDishForDetails by remember { mutableStateOf<DishItem?>(null) }
-    var showClearConfirmDialog by remember { mutableStateOf(false) } // Подтверждение очистки
+    var showClearConfirmDialog by remember { mutableStateOf(false) }
+    var showOrderSummarySheet by remember { mutableStateOf(false) } // Нижняя шторка подтверждения
 
     var isLoading by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
@@ -123,9 +123,16 @@ fun OrderMenuScreen() {
     val totalSum = dishes.sumOf { (orderState[it.rowIndex] ?: 0) * it.price }
     val totalCount = dishes.sumOf { orderState[it.rowIndex] ?: 0 }
     val budgetLimit = 600.0
-    val budgetProgress = (totalSum / budgetLimit).toFloat().coerceIn(0f, 1f)
 
-    // Загрузка листов таблицы[cite: 8]
+    // Прогресс бюджета и динамический цвет (Зеленый -> Желтый -> Красный)
+    val budgetProgress = (totalSum / budgetLimit).toFloat().coerceIn(0f, 1f)
+    val budgetIndicatorColor = when {
+        totalSum > budgetLimit -> Color(0xFFD32F2F) // Красный при перерасходе
+        totalSum > 450.0 -> Color(0xFFFF9800)       // Желтый/Оранжевый при приближении к лимиту
+        else -> Color(0xFF2E7D32)                   // Зеленый
+    }
+
+    // Загрузка листов таблицы
     LaunchedEffect(spreadsheetId) {
         isLoading = true
         val sheets = GoogleSheetsManager.getSheetTitles(context, spreadsheetId)
@@ -136,7 +143,7 @@ fun OrderMenuScreen() {
         isLoading = false
     }
 
-    // Загрузка меню (сначала локальный кэш, затем сеть)[cite: 8]
+    // Загрузка меню (сначала локальный кэш, затем сеть)
     LaunchedEffect(selectedSheetTitle, employeeNumber) {
         if (selectedSheetTitle.isNotEmpty()) {
             val cached = OrderStorage.loadMenuCache(context, selectedSheetTitle)
@@ -173,7 +180,7 @@ fun OrderMenuScreen() {
         }
     }
 
-    // Комплексная фильтрация[cite: 8]
+    // Комплексная фильтрация
     val filteredDishes = remember(dishes, searchQuery, excludeFilterText, showOnlyOrdered, orderState.toMap()) {
         val query = searchQuery.trim().lowercase()
         val exclude = excludeFilterText.trim().lowercase()
@@ -189,6 +196,138 @@ fun OrderMenuScreen() {
                 !dish.composition.lowercase().contains(exclude)
             )
             matchesQuery && notExcluded
+        }
+    }
+
+    // Список фактически выбранных блюд для сводки заказа
+    val selectedDishesSummary = remember(dishes, orderState.toMap()) {
+        dishes.mapNotNull { dish ->
+            val count = orderState[dish.rowIndex] ?: 0
+            if (count > 0) Pair(dish, count) else null
+        }
+    }
+
+    // Сводка заказа перед сохранением (ModalBottomSheet)
+    if (showOrderSummarySheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showOrderSummarySheet = false }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Сводка заказа",
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        text = "Сотрудник №$employeeNumber",
+                        fontSize = 13.sp,
+                        color = Color.Gray,
+                        fontWeight = FontWeight.Medium
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                if (selectedDishesSummary.isEmpty()) {
+                    Text(
+                        text = "Вы пока не выбрали ни одного блюда.",
+                        color = Color.Gray,
+                        modifier = Modifier.padding(vertical = 16.dp)
+                    )
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 280.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        selectedDishesSummary.forEach { (dish, qty) ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(dish.name, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                                    Text(
+                                        "${dish.price.toInt()} ₽ × $qty шт.",
+                                        fontSize = 12.sp,
+                                        color = Color.Gray
+                                    )
+                                }
+                                Text(
+                                    "${(dish.price * qty).toInt()} ₽",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF2E7D32)
+                                )
+                            }
+                            Divider(color = Color(0xFFEEEEEE))
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Итого к сохранению:", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                    Text(
+                        "${totalSum.toInt()} ₽",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 17.sp,
+                        color = if (totalSum > budgetLimit) Color.Red else Color(0xFF2E7D32)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Button(
+                    onClick = {
+                        showOrderSummarySheet = false
+                        scope.launch {
+                            isLoading = true
+                            val (success, message) = GoogleSheetsManager.submitOrder(
+                                context = context,
+                                spreadsheetId = spreadsheetId,
+                                sheetTitle = selectedSheetTitle,
+                                employeeNumber = employeeNumber,
+                                allDishes = dishes,
+                                currentQuantities = orderState
+                            )
+                            isLoading = false
+                            if (success) {
+                                OrderStorage.saveOrderTemplate(context, employeeNumber, selectedSheetTitle, orderState)
+                                Toast.makeText(context, "✅ Заказ сохранен в таблице!", Toast.LENGTH_SHORT).show()
+                            } else {
+                                Toast.makeText(context, "❌ $message (см. Лог 📝)", Toast.LENGTH_LONG).show()
+                                logContent = AppLogger.readLog(context)
+                                showLogDialog = true
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
+                ) {
+                    Icon(Icons.Default.Check, null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Подтвердить и отправить")
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+            }
         }
     }
 
@@ -218,7 +357,7 @@ fun OrderMenuScreen() {
         )
     }
 
-    // Диалог подробностей блюда[cite: 8]
+    // Диалог подробностей блюда
     selectedDishForDetails?.let { dish ->
         Dialog(onDismissRequest = { selectedDishForDetails = null }) {
             Card(
@@ -310,7 +449,7 @@ fun OrderMenuScreen() {
         }
     }
 
-    // Диалог логов[cite: 8]
+    // Диалог логов
     if (showLogDialog) {
         AlertDialog(
             onDismissRequest = { showLogDialog = false },
@@ -355,7 +494,7 @@ fun OrderMenuScreen() {
         )
     }
 
-    // Диалог настроек таблицы[cite: 8]
+    // Диалог настроек таблицы
     if (showSettingsDialog) {
         var tempUrl by remember { mutableStateOf(tableUrl) }
         AlertDialog(
@@ -420,14 +559,14 @@ fun OrderMenuScreen() {
         bottomBar = {
             Surface(shadowElevation = 8.dp, color = Color.White) {
                 Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                    // Индикатор прогресса бюджета
+                    // Индикатор прогресса бюджета: Зеленый -> Желтый -> Красный
                     LinearProgressIndicator(
                         progress = budgetProgress,
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(6.dp)
                             .clip(RoundedCornerShape(3.dp)),
-                        color = if (totalSum > budgetLimit) Color.Red else Color(0xFF2E7D32),
+                        color = budgetIndicatorColor,
                         trackColor = Color(0xFFE0E0E0)
                     )
 
@@ -453,7 +592,6 @@ fun OrderMenuScreen() {
                         }
 
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            // Кнопка быстрой очистки заказа
                             if (totalCount > 0) {
                                 IconButton(
                                     onClick = { showClearConfirmDialog = true },
@@ -463,30 +601,10 @@ fun OrderMenuScreen() {
                                 }
                             }
 
+                            // Кнопка открывает сводку заказа перед отправкой в таблицу
                             Button(
-                                onClick = {
-                                    scope.launch {
-                                        isLoading = true
-                                        val (success, message) = GoogleSheetsManager.submitOrder(
-                                            context = context,
-                                            spreadsheetId = spreadsheetId,
-                                            sheetTitle = selectedSheetTitle,
-                                            employeeNumber = employeeNumber,
-                                            allDishes = dishes,
-                                            currentQuantities = orderState
-                                        )
-                                        isLoading = false
-                                        if (success) {
-                                            OrderStorage.saveOrderTemplate(context, employeeNumber, selectedSheetTitle, orderState)
-                                            Toast.makeText(context, "✅ Заказ сохранен в таблице!", Toast.LENGTH_SHORT).show()
-                                        } else {
-                                            Toast.makeText(context, "❌ $message (см. Лог 📝)", Toast.LENGTH_LONG).show()
-                                            logContent = AppLogger.readLog(context)
-                                            showLogDialog = true
-                                        }
-                                    }
-                                },
-                                enabled = !isLoading,
+                                onClick = { showOrderSummarySheet = true },
+                                enabled = !isLoading && totalCount > 0,
                                 colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF2E7D32))
                             ) {
                                 Text("Сохранить")
@@ -543,7 +661,7 @@ fun OrderMenuScreen() {
 
                     Spacer(modifier = Modifier.height(4.dp))
 
-                    // Дни недели со скроллом[cite: 8]
+                    // Дни недели со скроллом
                     val daysScrollState = rememberScrollState()
                     Row(
                         modifier = Modifier
@@ -571,14 +689,13 @@ fun OrderMenuScreen() {
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    // Панель умных действий[cite: 8]
+                    // Панель умных действий
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        // Кнопка показа/скрытия фильтров
                         FilterChip(
                             selected = isFiltersVisible || searchQuery.isNotEmpty() || excludeFilterText.isNotEmpty(),
                             onClick = { isFiltersVisible = !isFiltersVisible },
@@ -597,7 +714,6 @@ fun OrderMenuScreen() {
                             }
                         )
 
-                        // Показать только выбранное (Корзина)[cite: 8]
                         FilterChip(
                             selected = showOnlyOrdered,
                             onClick = { showOnlyOrdered = !showOnlyOrdered },
@@ -605,7 +721,6 @@ fun OrderMenuScreen() {
                             label = { Text("Мой заказ ($totalCount)") }
                         )
 
-                        // Автосборка комбо на 600р[cite: 8]
                         FilledTonalButton(
                             onClick = {
                                 val combo = OrderStorage.generateBalancedCombo(dishes, budgetLimit)
@@ -625,7 +740,6 @@ fun OrderMenuScreen() {
                             Text("Комбо на 600 ₽", fontSize = 12.sp)
                         }
 
-                        // Повторить заказ прошлой недели[cite: 8]
                         OutlinedButton(
                             onClick = {
                                 val template = OrderStorage.loadOrderTemplate(context, employeeNumber, selectedSheetTitle)
@@ -653,7 +767,6 @@ fun OrderMenuScreen() {
                         exit = fadeOut() + shrinkVertically()
                     ) {
                         Column(modifier = Modifier.padding(top = 8.dp)) {
-                            // Прямой поиск названия блюда[cite: 8]
                             OutlinedTextField(
                                 value = searchQuery,
                                 onValueChange = { searchQuery = it },
@@ -674,7 +787,6 @@ fun OrderMenuScreen() {
 
                             Spacer(modifier = Modifier.height(6.dp))
 
-                            // Исключение ингредиентов и аллергенов
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
                                 color = Color(0xFFF1F8E9),
@@ -752,6 +864,44 @@ fun OrderMenuScreen() {
                 }
             } else {
                 val groupedDishes = remember(filteredDishes) { filteredDishes.groupBy { it.category } }
+
+                // Панель быстрого управления категориями ("Свернуть все" / "Развернуть все")
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Категории меню (${groupedDishes.size})",
+                        fontSize = 12.sp,
+                        color = Color.Gray,
+                        fontWeight = FontWeight.SemiBold
+                    )
+
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(
+                            text = "Свернуть все",
+                            fontSize = 12.sp,
+                            color = Color(0xFF2E7D32),
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.clickable {
+                                groupedDishes.keys.forEach { cat -> collapsedCategories[cat] = true }
+                            }
+                        )
+                        Text(text = "•", fontSize = 12.sp, color = Color.Gray)
+                        Text(
+                            text = "Развернуть все",
+                            fontSize = 12.sp,
+                            color = Color(0xFF2E7D32),
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.clickable {
+                                collapsedCategories.clear()
+                            }
+                        )
+                    }
+                }
 
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
