@@ -11,22 +11,23 @@ import com.google.auth.oauth2.GoogleCredentials
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.InputStream
+import java.util.regex.Pattern
 
 object GoogleSheetsManager {
 
-    // Идентификатор целевой Google Таблицы заказов
-    const val SPREADSHEET_ID = "10PDOQjOTR0_y8uGY2OFBjWDaFYgh8HkLYxa3hOi0NGM"
+    // Таблица по умолчанию
+    const val DEFAULT_SPREADSHEET_ID = "10PDOQjOTR0_y8uGY2OFBjWDaFYgh8HkLYxa3hOi0NGM"
 
     private var sheetsService: Sheets? = null
 
-    // Инициализация учетных данных Service Account из папки assets (service_account.json)
+    // Инициализация учетных данных Service Account из assets/service_account.json
     fun initCredentials(context: Context) {
         if (sheetsService != null) return
         try {
             val assetStream: InputStream = context.assets.open("service_account.json")
             val credentials = GoogleCredentials.fromStream(assetStream)
                 .createScoped(listOf(SheetsScopes.SPREADSHEETS))
-            
+
             sheetsService = Sheets.Builder(
                 NetHttpTransport(),
                 GsonFactory.getDefaultInstance(),
@@ -37,71 +38,140 @@ object GoogleSheetsManager {
         }
     }
 
-    // Загрузка блюд на выбранный день (например, лист "ПН 12_10_2026")
-    suspend fun loadMenuForDay(sheetTitle: String): List<DishItem> = withContext(Dispatchers.IO) {
+    // Извлечение Spreadsheet ID из произвольной ссылки на Google Таблицу
+    fun extractSpreadsheetId(url: String): String {
+        val cleanUrl = url.trim()
+        val matcher = Pattern.compile("/spreadsheets/d/([a-zA-Z0-9-_]+)").matcher(cleanUrl)
+        return if (matcher.find()) {
+            matcher.group(1) ?: DEFAULT_SPREADSHEET_ID
+        } else if (cleanUrl.isNotEmpty() && !cleanUrl.contains("/")) {
+            cleanUrl
+        } else {
+            DEFAULT_SPREADSHEET_ID
+        }
+    }
+
+    // Получение списка всех листов таблицы с их названиями и ID
+    suspend fun getSheetTitles(spreadsheetId: String): List<SheetInfo> = withContext(Dispatchers.IO) {
         val service = sheetsService ?: return@withContext emptyList()
-        val range = "'$sheetTitle'!A4:B120" // Колонки A (Блюдо) и B (Цена)
-        
         try {
-            val response = service.spreadsheets().values()
-                .get(SPREADSHEET_ID, range)
-                .execute()
-
-            val rows = response.getValues() ?: return@withContext emptyList()
-            val result = mutableListOf<DishItem>()
-            var currentCategory = "Основное"
-
-            rows.forEachIndexed { index, row ->
-                val rowIndex = index + 4
-                val name = row.getOrNull(0)?.toString()?.trim() ?: ""
-                val priceRaw = row.getOrNull(1)?.toString()?.replace(",", ".")?.trim() ?: ""
-
-                if (name.isNotEmpty()) {
-                    val price = priceRaw.toDoubleOrNull()
-                    if (price == null || price == 0.0) {
-                        // Это строка раздела (Салаты и закуски, Первые блюда и т.д.)
-                        currentCategory = name
-                    } else {
-                        // Генерируем ссылку поиска картинки на nam-nyam.ru
-                        val cleanQuery = name.split(" ")[0]
-                        val dummyImg = "https://www.nam-nyam.ru/images/dishes_preview.jpg"
-                        result.add(
-                            DishItem(
-                                rowIndex = rowIndex,
-                                name = name,
-                                price = price,
-                                category = currentCategory,
-                                imageUrl = dummyImg
-                            )
-                        )
-                    }
-                }
-            }
-            result
+            val spreadsheet = service.spreadsheets().get(spreadsheetId).execute()
+            spreadsheet.sheets?.map { sheet ->
+                SheetInfo(
+                    id = sheet.properties.sheetId,
+                    title = sheet.properties.title
+                )
+            } ?: emptyList()
         } catch (e: Exception) {
             e.printStackTrace()
             emptyList()
         }
     }
 
-    // Запись заказа сотрудника в соответствующую колонку (1..35 -> C..AK)
+    // Загрузка блюд и УЖЕ существующих заказов выбранного сотрудника
+    suspend fun loadMenuAndCurrentOrder(
+        spreadsheetId: String,
+        sheetTitle: String,
+        employeeNumber: Int
+    ): DayMenuResult = withContext(Dispatchers.IO) {
+        val service = sheetsService ?: return@withContext DayMenuResult()
+        
+        // Колонка A=1 (Блюдо), B=2 (Цена), Сотрудник N = N + 2
+        val empColLetter = getColumnLetter(employeeNumber + 2)
+        val readRange = "'$sheetTitle'!A1:$empColLetter150"
+
+        try {
+            val response = service.spreadsheets().values()
+                .get(spreadsheetId, readRange)
+                .execute()
+
+            val rows = response.getValues() ?: return@withContext DayMenuResult()
+            val dishes = mutableListOf<DishItem>()
+            val initialOrders = mutableMapOf<Int, Int>()
+
+            // Читаем дату дня из строк заголовка (обычно строки 1-3)
+            var dateHeader = ""
+            for (i in 0..minOf(3, rows.size - 1)) {
+                val rowStr = rows[i].joinToString(" ")
+                if (rowStr.contains("2026") || rowStr.contains("октября") || rowStr.contains("ноября")) {
+                    dateHeader = rowStr.trim()
+                    break
+                }
+            }
+
+            var currentCategory = "Салаты и закуски"
+            val empColIdx = (employeeNumber + 2) - 1
+
+            for (rowIndex in 3 until rows.size) {
+                val actualRowNum = rowIndex + 1
+                val row = rows[rowIndex]
+                val name = row.getOrNull(0)?.toString()?.trim() ?: ""
+                val priceRaw = row.getOrNull(1)?.toString()?.replace(",", ".")?.trim() ?: ""
+
+                if (name.isNotEmpty()) {
+                    val price = priceRaw.toDoubleOrNull()
+                    if (price == null || price == 0.0) {
+                        // Строка секции/категории
+                        if (!name.equals("Наименование", ignoreCase = true) && !name.equals("ИТОГО:", ignoreCase = true)) {
+                            currentCategory = name
+                        }
+                    } else {
+                        // Генерируем ссылку превью блюда
+                        val encodedDish = name.replace(" ", "%20")
+                        val photoUrl = "https://www.nam-nyam.ru/images/menu/$encodedDish.jpg"
+
+                        dishes.add(
+                            DishItem(
+                                rowIndex = actualRowNum,
+                                name = name,
+                                price = price,
+                                category = currentCategory,
+                                imageUrl = photoUrl
+                            )
+                        )
+
+                        // Чтение того, что уже заказано этим сотрудником в таблице
+                        val currentValRaw = row.getOrNull(empColIdx)?.toString()?.trim() ?: ""
+                        val currentQty = currentValRaw.toIntOrNull() ?: 0
+                        if (currentQty > 0) {
+                            initialOrders[actualRowNum] = currentQty
+                        }
+                    }
+                }
+            }
+
+            DayMenuResult(
+                dateHeader = dateHeader,
+                dishes = dishes,
+                existingOrders = initialOrders
+            )
+        } catch (e: Exception) {
+            e.printStackTrace()
+            DayMenuResult()
+        }
+    }
+
+    // Сохранение заказа сотрудника в таблицу
     suspend fun submitOrder(
+        spreadsheetId: String,
         sheetTitle: String,
         employeeNumber: Int,
-        orders: List<OrderItem>
+        allDishes: List<DishItem>,
+        currentQuantities: Map<Int, Int>
     ): Boolean = withContext(Dispatchers.IO) {
         val service = sheetsService ?: return@withContext false
-        
-        // Колонка A=1, B=2, Сотрудник 1 = C (колонка 3) -> colIndex = employeeNumber + 2
         val colLetter = getColumnLetter(employeeNumber + 2)
 
         try {
-            val updates = orders.filter { it.quantity > 0 }
-            for (order in updates) {
-                val cellAddress = "'$sheetTitle'!$colLetter${order.dish.rowIndex}"
-                val body = ValueRange().setValues(listOf(listOf(order.quantity)))
+            // Записываем порции (или очищаем, если стало 0)
+            for (dish in allDishes) {
+                val qty = currentQuantities[dish.rowIndex] ?: 0
+                val cellAddress = "'$sheetTitle'!$colLetter${dish.rowIndex}"
+                val cellValue = if (qty > 0) qty else ""
+                val body = ValueRange().setValues(listOf(listOf(cellValue)))
+
                 service.spreadsheets().values()
-                    .update(SPREADSHEET_ID, cellAddress, body)
+                    .update(spreadsheetId, cellAddress, body)
                     .setValueInputOption("USER_ENTERED")
                     .execute()
             }
@@ -123,3 +193,11 @@ object GoogleSheetsManager {
         return letter
     }
 }
+
+data class SheetInfo(val id: Int?, val title: String)
+
+data class DayMenuResult(
+    val dateHeader: String = "",
+    val dishes: List<DishItem> = emptyList(),
+    val existingOrders: Map<Int, Int> = emptyMap()
+)
