@@ -32,7 +32,6 @@ object GoogleSheetsManager {
             val credentialsAdapter = HttpCredentialsAdapter(credentials)
             val requestInitializer = HttpRequestInitializer { request ->
                 credentialsAdapter.initialize(request)
-                // Увеличенные таймауты против сбоев мобильного интернета
                 request.connectTimeout = 60_000
                 request.readTimeout = 60_000
             }
@@ -77,7 +76,7 @@ object GoogleSheetsManager {
             AppLogger.log(context, "GET_SHEETS", "Листы получены (${list.size}): ${list.map { it.title }}")
             list
         } catch (e: Exception) {
-            AppLogger.log(context, "GET_SHEETS_ERROR", "Ошибка доступа к таблице '$spreadsheetId': ${e.message}", e)
+            AppLogger.log(context, "GET_SHEETS_ERROR", "Ошибка доступа к таблице: ${e.message}", e)
             emptyList()
         }
     }
@@ -93,7 +92,8 @@ object GoogleSheetsManager {
         NamNyamScraper.fetchMenuImages(context)
 
         val empColLetter = getColumnLetter(employeeNumber + 2)
-        val readRange = "'$sheetTitle'!A1:${empColLetter}150"
+        // Увеличен диапазон до 350 строк, чтобы захватывать комплексные обеды в конце таблицы
+        val readRange = "'$sheetTitle'!A1:${empColLetter}350"
 
         try {
             val response = service.spreadsheets().values()
@@ -120,15 +120,28 @@ object GoogleSheetsManager {
                 val actualRowNum = rowIndex + 1
                 val row = rows[rowIndex]
                 val name = row.getOrNull(0)?.toString()?.trim() ?: ""
-                val priceRaw = row.getOrNull(1)?.toString()?.replace(",", ".")?.trim() ?: ""
+
+                // Нормализация цены: очистка от символов валюты, пробелов и запятых
+                val priceRaw = row.getOrNull(1)?.toString()
+                    ?.replace("руб", "", ignoreCase = true)
+                    ?.replace("р.", "", ignoreCase = true)
+                    ?.replace("р", "", ignoreCase = true)
+                    ?.replace("₽", "")
+                    ?.replace(" ", "")
+                    ?.replace("\u00A0", "")
+                    ?.replace(",", ".")
+                    ?.trim() ?: ""
 
                 if (name.isNotEmpty()) {
                     val price = priceRaw.toDoubleOrNull()
                     if (price == null || price == 0.0) {
-                        if (!name.equals("Наименование", ignoreCase = true) && !name.equals("ИТОГО:", ignoreCase = true)) {
+                        // Строка категории (включая "Комплексные обеды" и "Бизнес-ланчи")
+                        val lower = name.lowercase()
+                        if (!lower.contains("наименование") && !lower.contains("итого:") && !lower.contains("стоимость")) {
                             currentCategory = name
                         }
                     } else {
+                        // Полноценная позиция блюда или комплексного меню
                         val scrapedDetails = NamNyamScraper.findDetailsForDish(name)
                         val realImageUrl = scrapedDetails?.imageUrl ?: resolveFallbackImage(name, currentCategory)
                         val details = resolveDishMetadata(name, scrapedDetails)
@@ -169,7 +182,6 @@ object GoogleSheetsManager {
         }
     }
 
-    // Сохранение заказа одним атомарным запросом без превышения квоты 429
     suspend fun submitOrder(
         context: Context,
         spreadsheetId: String,
@@ -189,7 +201,6 @@ object GoogleSheetsManager {
         val maxRow = allDishes.maxOf { it.rowIndex }
         val dishRowsMap = allDishes.associateBy { it.rowIndex }
 
-        // Считываем текущую колонку, чтобы не стереть промежуточные разделители
         val readRange = "'$sheetTitle'!$colLetter$minRow:$colLetter$maxRow"
 
         var lastError: Exception? = null
@@ -216,14 +227,12 @@ object GoogleSheetsManager {
                         val cellVal = if (qty > 0) qty.toString() else ""
                         updatedValues.add(listOf(cellVal))
                     } else {
-                        // Оставляем исходное значение не-блюда (раздел, итог и т.п.)
                         updatedValues.add(listOf(existingCell))
                     }
                 }
 
                 val body = ValueRange().setValues(updatedValues)
 
-                // Единый запрос обновления одного диапазона (расходует 1 квоту вместо 130+)
                 service.spreadsheets().values()
                     .update(spreadsheetId, readRange, body)
                     .setValueInputOption("USER_ENTERED")
@@ -236,12 +245,12 @@ object GoogleSheetsManager {
                 lastError = e
                 AppLogger.log(context, "SUBMIT_RETRY", "Попытка $attempt завершилась ошибкой: ${e.message}")
                 if (attempt < 3) {
-                    delay(1500L * attempt) // Экспоненциальная пауза перед повтором
+                    delay(1500L * attempt)
                 }
             }
         }
 
-        val finalMsg = "Ошибка сохранения: ${lastError?.message ?: "неизвестный сбой"}"
+        val finalMsg = "Ошибка сохранения: ${lastError?.message ?: "сбой связи"}"
         AppLogger.log(context, "SUBMIT_FAIL", finalMsg, lastError)
         Pair(false, finalMsg)
     }
@@ -260,6 +269,13 @@ object GoogleSheetsManager {
     private fun resolveDishMetadata(name: String, scraped: ScrapedDishDetails?): ScrapedDishDetails {
         val lower = name.lowercase()
         return when {
+            lower.contains("комплекс") -> ScrapedDishDetails(
+                imageUrl = scraped?.imageUrl ?: "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=600&q=80",
+                composition = "Сбалансированный комплексный обед: салат, первое блюдо, горячее блюдо и хлеб",
+                minerals = "Ca, Fe, Mg, P, K",
+                vitamins = "A, B1, B2, C",
+                caloriesInfo = "580 ккал; Жиры: 22; Белки: 26; Углеводы: 68"
+            )
             lower.contains("морков") && lower.contains("корейск") -> ScrapedDishDetails(
                 imageUrl = scraped?.imageUrl ?: "",
                 composition = "Морковь, масло подсолнечное, сахар, уксус, соль, чеснок, перец, кунжут, кориандр",
@@ -302,6 +318,7 @@ object GoogleSheetsManager {
     private fun resolveFallbackImage(dishName: String, category: String): String {
         val lower = dishName.lowercase()
         return when {
+            lower.contains("комплекс") -> "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?w=400&q=80"
             lower.contains("морковь") -> "https://images.unsplash.com/photo-1598170845058-32b9d6a5da37?w=300&q=80"
             lower.contains("винегрет") -> "https://images.unsplash.com/photo-1540420773420-3366772f4999?w=300&q=80"
             lower.contains("борщ") -> "https://images.unsplash.com/photo-1547592166-23ac45744acd?w=300&q=80"
