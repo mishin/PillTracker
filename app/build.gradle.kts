@@ -4,17 +4,20 @@ plugins {
 }
 
 android {
-    namespace = "com.syncftp"
+    namespace = "ru.namnyam.menu"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.syncftp"
-        minSdk = 24
+        applicationId = "ru.namnyam.menu"
+        minSdk = 26
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 1
+        versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        vectorDrawables {
+            useSupportLibrary = true
+        }
     }
 
     buildTypes {
@@ -29,7 +32,6 @@ android {
 
     buildFeatures {
         compose = true
-        buildConfig = true
     }
 
     composeOptions {
@@ -44,34 +46,39 @@ android {
     kotlinOptions {
         jvmTarget = "1.8"
     }
+
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1,DEPENDENCIES}"
+        }
+    }
 }
 
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
-    implementation("androidx.activity:activity-compose:1.8.0")
-    implementation("androidx.compose.ui:ui:1.5.4")
-    implementation("androidx.compose.ui:ui-tooling-preview:1.5.4")
-    implementation("androidx.compose.material3:material3:1.1.2")
-    implementation("androidx.compose.material:material-icons-extended:1.5.4")
+    implementation("androidx.activity:activity-compose:1.8.2")
+
+    // Jetpack Compose
+    implementation(platform("androidx.compose:compose-bom:2023.10.01"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.ui:ui-graphics")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
+
+    // Coil для отображения фото блюд с сайта Нам-Ням
+    implementation("io.coil-kt:coil-compose:2.5.0")
+
+    // Google Sheets API v4 и Google Auth
+    implementation("com.google.api-client:google-api-client-android:2.2.0")
+    implementation("com.google.apis:google-api-services-sheets:v4-rev20230815-2.0.0")
+    implementation("com.google.auth:google-auth-library-oauth2-http:1.19.0")
+    implementation("com.google.code.gson:gson:2.10.1")
+
+    // Настройки пользователя (DataStore)
     implementation("androidx.datastore:datastore-preferences:1.0.0")
-    implementation("commons-net:commons-net:3.10.0")
-    implementation("com.github.mwiede:jsch:0.2.16")
-    implementation("com.google.accompanist:accompanist-permissions:0.32.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
-    // CameraX dependencies
-    implementation("androidx.camera:camera-core:1.3.0")
-    implementation("androidx.camera:camera-camera2:1.3.0")
-    implementation("androidx.camera:camera-lifecycle:1.3.0")
-    implementation("androidx.camera:camera-view:1.3.0")
-
-    // Image compression
-    implementation("androidx.exifinterface:exifinterface:1.3.6")
-
-    debugImplementation("androidx.compose.ui:ui-tooling:1.5.4")
-    debugImplementation("androidx.compose.ui:ui-test-manifest:1.5.4")
-
-    // Добавьте для сериализации истории
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.0")
+    debugImplementation("androidx.compose.ui:ui-tooling")
 }
