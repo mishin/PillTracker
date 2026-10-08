@@ -67,10 +67,10 @@ fun OrderMenuScreen() {
 
     var tableUrl by remember {
         mutableStateOf(
-            prefs.getString("table_url", "https://docs.google.com/spreadsheets/d/10PDOQjOTR0_y8uGY2OFBjWDaFYgh8HkLYxa3hOi0NGM/edit") ?: ""
+            prefs.getString("table_url", "https://docs.google.com/spreadsheets/d/10hP-ob73NNvkxTOSgq_Ri6xgMaXA0lO1g-f6CzyYPVA/edit") ?: ""
         )
     }
-    var employeeNumber by remember { mutableStateOf(prefs.getInt("employee_num", 1)) }
+    var employeeNumber by remember { mutableStateOf(prefs.getInt("employee_num", 33)) }
 
     var spreadsheetId by remember { mutableStateOf(GoogleSheetsManager.extractSpreadsheetId(tableUrl)) }
     var availableSheets by remember { mutableStateOf<List<SheetInfo>>(emptyList()) }
@@ -111,6 +111,21 @@ fun OrderMenuScreen() {
             orderState.clear()
             orderState.putAll(result.existingOrders)
             isLoading = false
+        }
+    }
+
+    // Вычисляем понятную дату для отображения над кнопками дня
+    val formattedDayDate = remember(selectedSheetTitle, dateHeader) {
+        if (dateHeader.isNotEmpty()) {
+            dateHeader
+        } else {
+            // Например из 'ПН 12_10_2026' -> '12.10.2026'
+            val match = Regex("""(\d{2})_(\d{2})_(\d{4})""").find(selectedSheetTitle)
+            if (match != null) {
+                "${match.groupValues[1]}.${match.groupValues[2]}.${match.groupValues[3]} г."
+            } else {
+                selectedSheetTitle
+            }
         }
     }
 
@@ -217,9 +232,7 @@ fun OrderMenuScreen() {
                 title = {
                     Column {
                         Text("Обеды Нам-Ням", fontWeight = FontWeight.Bold, fontSize = 17.sp)
-                        if (dateHeader.isNotEmpty()) {
-                            Text(dateHeader, fontSize = 11.sp, color = Color.White.copy(alpha = 0.85f))
-                        }
+                        Text(formattedDayDate, fontSize = 11.sp, color = Color.White.copy(alpha = 0.9f))
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
@@ -301,6 +314,7 @@ fun OrderMenuScreen() {
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            // Верхняя плашка выбора сотрудника и даты
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -342,19 +356,43 @@ fun OrderMenuScreen() {
 
                     Spacer(modifier = Modifier.height(6.dp))
 
-                    Text("Выберите день:", fontSize = 12.sp, color = Color.Gray)
+                    // Блок ДАТЫ над днем недели
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("Дата меню:", fontSize = 12.sp, color = Color.Gray)
+                        Text(
+                            formattedDayDate,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = Color(0xFF2E7D32)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(4.dp))
+
+                    // Кнопки дней недели
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 4.dp),
+                            .padding(top = 2.dp),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         availableSheets.forEach { sheet: SheetInfo ->
-                            val label = sheet.title.split(" ").firstOrNull() ?: sheet.title
+                            val match = Regex("""(\d{2})_(\d{2})""").find(sheet.title)
+                            val shortLabel = if (match != null) {
+                                val dayName = sheet.title.split(" ").firstOrNull() ?: ""
+                                "$dayName ${match.groupValues[1]}.${match.groupValues[2]}"
+                            } else {
+                                sheet.title.split(" ").firstOrNull() ?: sheet.title
+                            }
+
                             FilterChip(
                                 selected = selectedSheetTitle == sheet.title,
                                 onClick = { selectedSheetTitle = sheet.title },
-                                label = { Text(label, fontSize = 12.sp) }
+                                label = { Text(shortLabel, fontSize = 11.sp, fontWeight = FontWeight.Medium) }
                             )
                         }
                     }
