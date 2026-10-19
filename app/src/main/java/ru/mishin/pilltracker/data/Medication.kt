@@ -36,6 +36,11 @@ interface MedicationDao {
     // Сброс галочек в полночь
     @Query("UPDATE medications SET isTakenToday = 0")
     suspend fun resetDailyIntake()
+
+    // НОВОЕ: очистка таблицы перед импортом в режиме "Заменить".
+    // Возвращает количество удалённых строк — полезно для логов и UI.
+    @Query("DELETE FROM medications")
+    suspend fun clearAll(): Int
 }
 
 // Было: @Database(entities = [Medication::class], version = 1)

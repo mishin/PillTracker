@@ -28,7 +28,12 @@ import ru.mishin.pilltracker.data.Medication
 import ru.mishin.pilltracker.view.MedicationViewModel
 import ru.mishin.pilltracker.service.scheduleMedicationAlarm
 import ru.mishin.pilltracker.util.scheduleDailyReset
-
+import android.net.Uri
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -51,24 +56,59 @@ fun MedicationAppScreen(viewModel: MedicationViewModel) {
     val medications by viewModel.medications.collectAsState()
     var showAddDialog by remember { mutableStateOf(false) }
 
-    // Лаунчер для запроса разрешений на уведомления (Android 13+)
+    // Состояния для импорта CSV
+    var pendingCsvUri by remember { mutableStateOf<Uri?>(null) }
+    var showReplaceDialog by remember { mutableStateOf(false) }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+
+    // Лаунчер разрешений (существующий)
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
-    ) { _ -> // ИСПРАВЛЕНИЕ: замените isGranted на символ подчеркивания
-        // Здесь можно обработать отказ, но пока просто запрашиваем
+    ) { _ -> }
+
+    // НОВЫЙ лаунчер: выбор CSV-файла через системный file picker (без разрешений!)
+    val csvFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        if (medications.isEmpty()) {
+            // Список пуст — импортируем сразу
+            launchCsvImport(
+                context = context,
+                viewModel = viewModel,
+                uri = uri,
+                replaceExisting = false,
+                scope = scope,
+                snackbarHostState = snackbarHostState
+            )
+        } else {
+            // Уже есть данные — спросим пользователя
+            pendingCsvUri = uri
+            showReplaceDialog = true
+        }
     }
 
-    // Запускаем воркер и просим разрешения при старте экрана
     LaunchedEffect(Unit) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-        // Запуск ежедневного сброса галочек (из пакета util)
         scheduleDailyReset(context)
     }
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Мои лекарства (График)") }) },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        topBar = {
+            TopAppBar(
+                title = { Text("Мои лекарства (График)") },
+                actions = {
+                    // НОВОЕ: иконка импорта
+                    IconButton(onClick = { csvFileLauncher.launch("*/*") }) {
+                        Icon(Icons.Filled.Download, contentDescription = "Импорт CSV")
+                    }
+                }
+            )
+        },
         floatingActionButton = {
             FloatingActionButton(onClick = { showAddDialog = true }) {
                 Icon(Icons.Filled.Add, "Добавить")
@@ -106,6 +146,60 @@ fun MedicationAppScreen(viewModel: MedicationViewModel) {
             )
         }
     }
+
+    // НОВЫЙ диалог выбора режима импорта (только когда список не пуст)
+    if (showReplaceDialog && pendingCsvUri != null) {
+        AlertDialog(
+            onDismissRequest = { showReplaceDialog = false; pendingCsvUri = null },
+            title = { Text("Импорт из CSV") },
+            text = {
+                Text("В списке уже ${medications.size} записей. Заменить их или добавить к существующим?")
+            },
+            confirmButton = {
+                Button(onClick = {
+                    val uri = pendingCsvUri!!
+                    showReplaceDialog = false
+                    pendingCsvUri = null
+                    launchCsvImport(context, viewModel, uri, replaceExisting = true, scope, snackbarHostState)
+                }) { Text("Заменить") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    val uri = pendingCsvUri!!
+                    showReplaceDialog = false
+                    pendingCsvUri = null
+                    launchCsvImport(context, viewModel, uri, replaceExisting = false, scope, snackbarHostState)
+                }) { Text("Добавить") }
+            }
+        )
+    }
+}
+
+/** Общий хелпер запуска импорта с единообразной обработкой результата. */
+private fun launchCsvImport(
+    context: android.content.Context,
+    viewModel: MedicationViewModel,
+    uri: Uri,
+    replaceExisting: Boolean,
+    scope: kotlinx.coroutines.CoroutineScope,
+    snackbarHostState: SnackbarHostState
+) {
+    viewModel.importFromCsv(
+        context = context,
+        uri = uri,
+        replaceExisting = replaceExisting,
+        onMedicationAdded = { med, id -> scheduleMedicationAlarm(context, med, id) },
+        onComplete = { count ->
+            scope.launch {
+                snackbarHostState.showSnackbar("Импортировано лекарств: $count")
+            }
+        },
+        onError = { msg ->
+            scope.launch {
+                snackbarHostState.showSnackbar("Ошибка импорта: $msg")
+            }
+        }
+    )
 }
 
 @Composable
