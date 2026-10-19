@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "SyncFTP"
+rootProject.name = "PillTracker"
 include(":app")

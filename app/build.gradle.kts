@@ -1,14 +1,16 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+// УДАЛИТЕ строку id("kotlin-kapt") и вставьте эту:
+    id("com.google.devtools.ksp")
 }
 
 android {
-    namespace = "ru.namnyam.menu"
+    namespace = "ru.mishin.pilltracker"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "ru.namnyam.menu"
+        applicationId = "ru.mishin.pilltracker"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
@@ -54,6 +56,8 @@ android {
     }
 }
 
+// ... существующий код секции android { ... }
+
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
@@ -67,20 +71,17 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
 
-    // Coil для загрузки фото
-    implementation("io.coil-kt:coil-compose:2.5.0")
+    // WorkManager (Сброс галочек в полночь)
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
+    
+    // Room (База данных)
+    val room_version = "2.6.1"
+    implementation("androidx.room:room-runtime:$room_version")
+    implementation("androidx.room:room-ktx:$room_version")
+// ИСПРАВЛЕНИЕ: меняем kapt на ksp (или берем в кавычки "ksp", если студия тупит)
+    ksp("androidx.room:room-compiler:$room_version")
 
-    // Jsoup для граббинга реальных картинок с сайта nam-nyam.ru
-    implementation("org.jsoup:jsoup:1.17.2")
-
-    // Google Sheets API v4 и Google Auth
-    implementation("com.google.api-client:google-api-client-android:2.2.0")
-    implementation("com.google.apis:google-api-services-sheets:v4-rev20230815-2.0.0")
-    implementation("com.google.auth:google-auth-library-oauth2-http:1.19.0")
-    implementation("com.google.code.gson:gson:2.10.1")
-
-    // Настройки пользователя (DataStore / Preferences)
-    implementation("androidx.datastore:datastore-preferences:1.0.0")
+    // Корутины
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
