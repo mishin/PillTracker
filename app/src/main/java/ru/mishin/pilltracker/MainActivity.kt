@@ -30,6 +30,7 @@ import ru.mishin.pilltracker.service.scheduleMedicationAlarm
 import ru.mishin.pilltracker.util.scheduleDailyReset
 import android.net.Uri
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.rememberCoroutineScope
@@ -61,6 +62,10 @@ fun MedicationAppScreen(viewModel: MedicationViewModel) {
     var showReplaceDialog by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+
+    // Внутри функции MedicationAppScreen добавьте состояние для диалога
+    var showUrlDialog by remember { mutableStateOf(false) }
+    var inputUrl by remember { mutableStateOf("") }
 
     // Лаунчер разрешений (существующий)
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -101,8 +106,13 @@ fun MedicationAppScreen(viewModel: MedicationViewModel) {
         topBar = {
             TopAppBar(
                 title = { Text("Мои лекарства (График)") },
+                    // В TopAppBar добавьте кнопку рядом с иконкой загрузки
                 actions = {
-                    // НОВОЕ: иконка импорта
+                    // Новая кнопка для импорта по ссылке
+                    IconButton(onClick = { showUrlDialog = true }) {
+                        Icon(Icons.Filled.Link, contentDescription = "Импорт по ссылке") // Импортируйте иконку Link
+                    }
+                    // Существующая кнопка для локального файла
                     IconButton(onClick = { csvFileLauncher.launch("*/*") }) {
                         Icon(Icons.Filled.Download, contentDescription = "Импорт CSV")
                     }
@@ -142,6 +152,44 @@ fun MedicationAppScreen(viewModel: MedicationViewModel) {
                         scheduleMedicationAlarm(context, newMed, newId)
                     }
                     showAddDialog = false
+                }
+            )
+        }
+        // В конце функции (перед закрывающей скобкой) добавьте диалог ввода ссылки
+        if (showUrlDialog) {
+            AlertDialog(
+                onDismissRequest = { showUrlDialog = false },
+                title = { Text("Импорт из Google Таблиц") },
+                text = {
+                    Column {
+                        Text("Вставьте ссылку на таблицу (доступную для просмотра по ссылке):")
+                        OutlinedTextField(
+                            value = inputUrl,
+                            onValueChange = { inputUrl = it },
+                            placeholder = { Text("https://docs.google.com/...") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    }
+                },
+                confirmButton = {
+                    Button(onClick = {
+                        showUrlDialog = false
+                        // Вызов метода ViewModel
+                        viewModel.importFromGoogleSheetsUrl(
+                            urlString = inputUrl,
+                            replaceExisting = medications.isNotEmpty(), // Можно добавить логику с диалогом замены
+                            onMedicationAdded = { med, id -> scheduleMedicationAlarm(context, med, id) },
+                            onComplete = { count ->
+                                scope.launch { snackbarHostState.showSnackbar("Загружено из сети: $count") }
+                            },
+                            onError = { msg ->
+                                scope.launch { snackbarHostState.showSnackbar("Ошибка: $msg") }
+                            }
+                        )
+                    }) { Text("Загрузить") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showUrlDialog = false }) { Text("Отмена") }
                 }
             )
         }

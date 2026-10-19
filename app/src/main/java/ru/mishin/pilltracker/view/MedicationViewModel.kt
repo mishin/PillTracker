@@ -12,9 +12,12 @@ import kotlinx.coroutines.withContext
 import ru.mishin.pilltracker.data.Medication
 import ru.mishin.pilltracker.data.MedicationDao
 import java.io.BufferedReader
+import java.io.InputStream
 import java.io.InputStreamReader
+import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Locale
+import java.util.regex.Pattern
 
 class MedicationViewModel(private val dao: MedicationDao) : ViewModel() {
     val medications = dao.getAllMedications()
@@ -39,7 +42,6 @@ class MedicationViewModel(private val dao: MedicationDao) : ViewModel() {
         }
     }
 
-    // Подсчет оставшихся дней курса
     fun calculateDaysLeft(med: Medication): Int {
         val currentMillis = System.currentTimeMillis()
         val diffMillis = currentMillis - med.startTimestamp
@@ -48,18 +50,7 @@ class MedicationViewModel(private val dao: MedicationDao) : ViewModel() {
         return if (daysLeft > 0) daysLeft else 0
     }
 
-    /**
-     * Импорт списка лекарств из CSV-файла (экспорт из Excel / Google Таблиц).
-     *
-     * Ожидаемый формат (соответствует файлу "График приёма лекарств.xlsx"):
-     *   Строка 1 (заголовок): "Лекарство","Время приёма","2026-10-17 00:00:00", ...
-     *   Строки 2..N:          "<название или пусто>","<текстовое время>","...","..."
-     *
-     * @param replaceExisting если true — таблица полностью очищается перед вставкой.
-     * @param onMedicationAdded вызывается из IO-потока для каждого лекарства (для планирования будильника).
-     * @param onComplete вызывается на Main-потоке с числом успешно добавленных записей.
-     * @param onError вызывается на Main-потоке с текстом ошибки.
-     */
+    /** Импорт из локального файла (Uri) */
     fun importFromCsv(
         context: Context,
         uri: Uri,
@@ -69,69 +60,14 @@ class MedicationViewModel(private val dao: MedicationDao) : ViewModel() {
         onError: (String) -> Unit
     ) {
         viewModelScope.launch(Dispatchers.IO) {
-            var addedCount = 0
             try {
-                // applicationContext — безопасно хранить в корутине IO-диспетчера
                 val appContext = context.applicationContext
                 val inputStream = appContext.contentResolver.openInputStream(uri)
-                    ?: run {
-                        withContext(Dispatchers.Main) { onError("Не удалось открыть файл") }
-                        return@launch
-                    }
+                    ?: throw IllegalArgumentException("Не удалось открыть файл")
 
-                if (replaceExisting) {
-                    dao.clearAll()
-                }
+                if (replaceExisting) dao.clearAll()
 
-                // SimpleDateFormat не потокобезопасен, но мы внутри одной корутины — ок
-                val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
-                var durationDays = 14
-                var courseStart: Long = System.currentTimeMillis()
-                var lastName = ""
-
-                BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8)).use { reader ->
-                    // Удаляем BOM, который Excel любит добавлять в начало файла
-                    var headerLine = reader.readLine()?.trim()?.removePrefix("\uFEFF") ?: return@use
-                    val header = parseCsvLine(headerLine)
-                    if (header.size > 2) {
-                        durationDays = header.size - 2
-                        courseStart = try {
-                            dateFormat.parse(header[2])?.time ?: System.currentTimeMillis()
-                        } catch (e: Exception) {
-                            System.currentTimeMillis()
-                        }
-                    }
-
-                    var line: String?
-                    while (reader.readLine().also { line = it } != null) {
-                        val row = parseCsvLine(line!!)
-                        if (row.size < 2) continue
-
-                        val rawName = row[0].replace("\n", " ").replace("\r", " ").trim()
-                        // Пустая ячейка = объединённая с предыдущей строкой (Excel merged cells)
-                        if (rawName.isNotEmpty() && rawName != "-") {
-                            lastName = rawName
-                        }
-
-                        val timeStr = row[1].trim().lowercase(Locale.ROOT)
-                        if (lastName.isEmpty() || timeStr.isEmpty() || timeStr == "время приёма") continue
-
-                        val (hour, minute) = mapTimeKeywords(timeStr)
-
-                        val med = Medication(
-                            name = lastName,
-                            hour = hour,
-                            minute = minute,
-                            startTimestamp = courseStart,
-                            durationDays = durationDays
-                        )
-                        val newId = dao.insert(med).toInt()
-                        // Будильник планируем сразу — callback уже в IO-потоке, AlarmManager это переживёт
-                        onMedicationAdded(med, newId)
-                        addedCount++
-                    }
-                }
-
+                val addedCount = processCsvStream(inputStream, onMedicationAdded)
                 withContext(Dispatchers.Main) { onComplete(addedCount) }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) { onError(e.message ?: "Ошибка парсинга CSV") }
@@ -139,7 +75,92 @@ class MedicationViewModel(private val dao: MedicationDao) : ViewModel() {
         }
     }
 
-    /** Разбор одной строки CSV с учётом кавычек (RFC 4180) и запятых внутри значений. */
+    /** Импорт напрямую из Google Таблиц по ссылке */
+    fun importFromGoogleSheetsUrl(
+        urlString: String,
+        replaceExisting: Boolean,
+        onMedicationAdded: (Medication, Int) -> Unit,
+        onComplete: (Int) -> Unit,
+        onError: (String) -> Unit
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val spreadsheetId = extractSpreadsheetId(urlString)
+                    ?: throw IllegalArgumentException("Неверный формат ссылки Google Таблиц")
+
+                val exportUrl = "https://docs.google.com/spreadsheets/d/$spreadsheetId/export?format=csv"
+                val inputStream: InputStream = URL(exportUrl).openStream()
+
+                if (replaceExisting) dao.clearAll()
+
+                val addedCount = processCsvStream(inputStream, onMedicationAdded)
+                withContext(Dispatchers.Main) { onComplete(addedCount) }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { onError(e.message ?: "Ошибка загрузки из сети") }
+            }
+        }
+    }
+
+    /**
+     * Общий метод для разбора CSV-потока (используется и для файлов, и для ссылок).
+     * Возвращает количество успешно добавленных записей.
+     * ДОБАВЛЕНО: ключевое слово suspend, так как вызывается dao.insert()
+     */
+    private suspend fun processCsvStream(
+        inputStream: InputStream,
+        onMedicationAdded: (Medication, Int) -> Unit
+    ): Int {
+        var addedCount = 0
+        val dateFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+        var durationDays = 14
+        var courseStart: Long = System.currentTimeMillis()
+        var lastName = ""
+
+        BufferedReader(InputStreamReader(inputStream, Charsets.UTF_8)).use { reader ->
+            var headerLine = reader.readLine()?.trim()?.removePrefix("\uFEFF") ?: return 0
+            val header = parseCsvLine(headerLine)
+            if (header.size > 2) {
+                durationDays = header.size - 2
+                courseStart = try {
+                    dateFormat.parse(header[2])?.time ?: System.currentTimeMillis()
+                } catch (e: Exception) {
+                    System.currentTimeMillis()
+                }
+            }
+
+            var line: String?
+            while (reader.readLine().also { line = it } != null) {
+                val row = parseCsvLine(line!!)
+                if (row.size < 2) continue
+
+                val rawName = row[0].replace("\n", " ").replace("\r", " ").trim()
+                if (rawName.isNotEmpty() && rawName != "-") {
+                    lastName = rawName
+                }
+
+                val timeStr = row[1].trim().lowercase(Locale.ROOT)
+                if (lastName.isEmpty() || timeStr.isEmpty() || timeStr == "время приёма") continue
+
+                val (hour, minute) = mapTimeKeywords(timeStr)
+
+                val med = Medication(
+                    name = lastName,
+                    hour = hour,
+                    minute = minute,
+                    startTimestamp = courseStart,
+                    durationDays = durationDays
+                )
+
+                // Теперь это сработает, так как функция помечена как suspend
+                val newId = dao.insert(med).toInt()
+
+                onMedicationAdded(med, newId)
+                addedCount++
+            }
+        }
+        return addedCount
+    }
+
     private fun parseCsvLine(line: String): List<String> {
         val result = mutableListOf<String>()
         val current = StringBuilder()
@@ -158,7 +179,6 @@ class MedicationViewModel(private val dao: MedicationDao) : ViewModel() {
         return result
     }
 
-    /** Маппинг текстового времени из таблицы в (hour, minute). */
     private fun mapTimeKeywords(text: String): Pair<Int, Int> = when {
         text.contains("утро") -> 7 to 30
         text.contains("завтрак") && text.contains("после") -> 8 to 30
@@ -167,6 +187,12 @@ class MedicationViewModel(private val dao: MedicationDao) : ViewModel() {
         text.contains("вечер") -> 18 to 30
         text.contains("ужин") -> 19 to 30
         text.contains("сном") || text.contains("сон") -> 22 to 0
-        else -> 8 to 0 // fallback — утро
+        else -> 8 to 0
+    }
+
+    private fun extractSpreadsheetId(url: String): String? {
+        val pattern = Pattern.compile("/d/([a-zA-Z0-9-_]+)")
+        val matcher = pattern.matcher(url)
+        return if (matcher.find()) matcher.group(1) else null
     }
 }
