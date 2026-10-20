@@ -4,6 +4,8 @@ import androidx.room.Dao
 import androidx.room.Database
 import androidx.room.Delete
 import androidx.room.Entity
+import androidx.room.ForeignKey
+import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
@@ -23,7 +25,27 @@ data class Medication(
     val startTimestamp: Long,
     val durationDays: Int,
     val isTakenToday: Boolean = false,
-    val notes: String = ""
+    val notes: String = "",
+    val timeLabel: String = ""
+)
+
+@Entity(
+    tableName = "dose_intakes",
+    primaryKeys = ["medicationId", "epochDay"],
+    foreignKeys = [
+        ForeignKey(
+            entity = Medication::class,
+            parentColumns = ["id"],
+            childColumns = ["medicationId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index("medicationId")]
+)
+data class DoseIntake(
+    val medicationId: Int,
+    val epochDay: Long,
+    val taken: Boolean = true
 )
 
 @Dao
@@ -31,7 +53,7 @@ interface MedicationDao {
     @Query("SELECT * FROM medications")
     suspend fun getAllMedicationsList(): List<Medication>
 
-    @Query("SELECT * FROM medications ORDER BY hour, minute ASC")
+    @Query("SELECT * FROM medications ORDER BY id ASC")
     fun getAllMedications(): Flow<List<Medication>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -48,9 +70,22 @@ interface MedicationDao {
 
     @Query("DELETE FROM medications")
     suspend fun clearAll(): Int
+
+    @Query("SELECT * FROM dose_intakes")
+    fun getAllIntakes(): Flow<List<DoseIntake>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertIntake(intake: DoseIntake)
+
+    @Query("DELETE FROM dose_intakes WHERE medicationId = :medicationId AND epochDay = :epochDay")
+    suspend fun deleteIntake(medicationId: Int, epochDay: Long)
 }
 
-@Database(entities = [Medication::class], version = 2, exportSchema = false)
+@Database(
+    entities = [Medication::class, DoseIntake::class],
+    version = 3,
+    exportSchema = false
+)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun medicationDao(): MedicationDao
 
@@ -59,6 +94,28 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     "ALTER TABLE medications ADD COLUMN notes TEXT NOT NULL DEFAULT ''"
+                )
+            }
+        }
+
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE medications ADD COLUMN timeLabel TEXT NOT NULL DEFAULT ''"
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS dose_intakes (
+                        medicationId INTEGER NOT NULL,
+                        epochDay INTEGER NOT NULL,
+                        taken INTEGER NOT NULL DEFAULT 1,
+                        PRIMARY KEY(medicationId, epochDay),
+                        FOREIGN KEY(medicationId) REFERENCES medications(id) ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_dose_intakes_medicationId ON dose_intakes(medicationId)"
                 )
             }
         }
