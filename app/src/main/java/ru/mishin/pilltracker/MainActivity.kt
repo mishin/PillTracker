@@ -20,10 +20,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.room.Room
 
-// Импортируем классы из ваших новых пакетов
-import ru.mishin.pilltracker.data.AppDatabase
+import ru.mishin.pilltracker.data.DatabaseProvider
 import ru.mishin.pilltracker.data.Medication
 import ru.mishin.pilltracker.view.MedicationViewModel
 import ru.mishin.pilltracker.service.scheduleMedicationAlarm
@@ -39,7 +37,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        val db = Room.databaseBuilder(applicationContext, AppDatabase::class.java, "meds_db").build()
+        val db = DatabaseProvider.get(applicationContext)
         val viewModel = MedicationViewModel(db.medicationDao())
 
         setContent {

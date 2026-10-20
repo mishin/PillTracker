@@ -1,6 +1,17 @@
 package ru.mishin.pilltracker.data
 
-import androidx.room.*
+import androidx.room.Dao
+import androidx.room.Database
+import androidx.room.Delete
+import androidx.room.Entity
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.PrimaryKey
+import androidx.room.Query
+import androidx.room.RoomDatabase
+import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "medications")
@@ -9,18 +20,17 @@ data class Medication(
     val name: String,
     val hour: Int,
     val minute: Int,
-    val startTimestamp: Long, // Когда начали (например, в четверг)
-    val durationDays: Int,    // Длительность курса
-    val isTakenToday: Boolean = false // Галочка приема
+    val startTimestamp: Long,
+    val durationDays: Int,
+    val isTakenToday: Boolean = false,
+    val notes: String = ""
 )
 
 @Dao
 interface MedicationDao {
-    // ==========================================
-    // ДОБАВИТЬ ЭТОТ МЕТОД (Одноразовое чтение):
     @Query("SELECT * FROM medications")
     suspend fun getAllMedicationsList(): List<Medication>
-    // ==========================================
+
     @Query("SELECT * FROM medications ORDER BY hour, minute ASC")
     fun getAllMedications(): Flow<List<Medication>>
 
@@ -32,20 +42,25 @@ interface MedicationDao {
 
     @Delete
     suspend fun delete(medication: Medication)
-    
-    // Сброс галочек в полночь
+
     @Query("UPDATE medications SET isTakenToday = 0")
     suspend fun resetDailyIntake()
 
-    // НОВОЕ: очистка таблицы перед импортом в режиме "Заменить".
-    // Возвращает количество удалённых строк — полезно для логов и UI.
     @Query("DELETE FROM medications")
     suspend fun clearAll(): Int
 }
 
-// Было: @Database(entities = [Medication::class], version = 1)
-// Стало: добавляем параметр exportSchema = false
-@Database(entities = [Medication::class], version = 1, exportSchema = false)
+@Database(entities = [Medication::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun medicationDao(): MedicationDao
+
+    companion object {
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE medications ADD COLUMN notes TEXT NOT NULL DEFAULT ''"
+                )
+            }
+        }
+    }
 }
