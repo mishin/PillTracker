@@ -13,6 +13,8 @@ fun scheduleMedicationAlarm(context: Context, medication: Medication, medId: Int
     val intent = Intent(context, MedicationAlarmReceiver::class.java).apply {
         putExtra("MED_NAME", medication.name)
         putExtra("MED_ID", medId)
+        putExtra("MED_HOUR", medication.hour)
+        putExtra("MED_MINUTE", medication.minute)
     }
 
     val pendingIntent = PendingIntent.getBroadcast(

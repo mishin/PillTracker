@@ -43,12 +43,15 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
+import ru.mishin.pilltracker.data.MedicationRepository
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
         val db = DatabaseProvider.get(applicationContext)
-        val viewModel = MedicationViewModel(db.medicationDao())
+        val repository = MedicationRepository(db.medicationDao())
+        val viewModel = MedicationViewModel(repository)
 
         setContent {
             MaterialTheme {
