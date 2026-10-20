@@ -20,6 +20,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+// ДОБАВЬТЕ ЭТИ ИМПОРТЫ ДЛЯ СЕТКИ:
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.graphics.Color
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import ru.mishin.pilltracker.view.ScheduleUiState
 
 import ru.mishin.pilltracker.data.DatabaseProvider
 import ru.mishin.pilltracker.data.Medication
@@ -53,6 +63,8 @@ class MainActivity : ComponentActivity() {
 fun MedicationAppScreen(viewModel: MedicationViewModel) {
     val context = LocalContext.current
     val medications by viewModel.medications.collectAsState()
+    // Подписываемся на состояние расписания (нам нужны дни курса и галочки)
+    val scheduleState by viewModel.schedule.collectAsState()
     var showAddDialog by remember { mutableStateOf(false) }
 
     // Состояния для импорта CSV
@@ -123,15 +135,24 @@ fun MedicationAppScreen(viewModel: MedicationViewModel) {
             }
         }
     ) { padding ->
-        LazyColumn(contentPadding = padding, modifier = Modifier.fillMaxSize().padding(16.dp)) {
-            items(medications) { med ->
-                MedicationCard(
-                    medication = med,
-                    daysLeft = viewModel.calculateDaysLeft(med),
-                    onCheckedChange = { isChecked -> viewModel.toggleTakenStatus(med, isChecked) },
-                    onDelete = { viewModel.deleteMedication(med) }
+// ИЗМЕНЕНИЕ: Вместо LazyColumn рисуем нашу Excel-подобную сетку
+        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+            if (medications.isEmpty()) {
+                Text(
+                    text = "Список пуст. Добавьте лекарства или загрузите график.",
+                    modifier = Modifier.align(Alignment.Center).padding(16.dp),
+                    style = MaterialTheme.typography.bodyLarge
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+            } else {
+                val days = scheduleState.courseDays.ifEmpty { listOf(LocalDate.now()) }
+                MedicationGrid(
+                    meds = medications,
+                    courseDays = days,
+                    scheduleState = scheduleState,
+                    onToggle = { med, date, checked ->
+                        viewModel.toggleTakenOnDay(med, date, checked)
+                    }
+                )
             }
         }
 
@@ -310,4 +331,84 @@ fun AddMedicationDialog(onDismiss: () -> Unit, onSave: (String, Int, Int, Int) -
             TextButton(onClick = onDismiss) { Text("Отмена") }
         }
     )
+}
+
+// НОВАЯ COMPOSE-ФУНКЦИЯ: Отрисовка графика (аналог Google Sheets)
+@Composable
+fun MedicationGrid(
+    meds: List<Medication>,
+    courseDays: List<LocalDate>,
+    scheduleState: ScheduleUiState,
+    onToggle: (Medication, LocalDate, Boolean) -> Unit
+) {
+    // Состояния прокрутки: один для вертикали (вся таблица), другой для горизонтали (даты)
+    val verticalScroll = rememberScrollState()
+    val horizontalScroll = rememberScrollState()
+    val rowHeight = 72.dp
+
+    Row(modifier = Modifier.fillMaxSize().verticalScroll(verticalScroll)) {
+        // 1. ЛЕВАЯ ЗАМОРОЖЕННАЯ ПАНЕЛЬ (Препарат + Время)
+        Column(modifier = Modifier.width(160.dp)) {
+            // Заголовок левой колонки
+            Box(modifier = Modifier.height(48.dp).padding(start = 16.dp), contentAlignment = Alignment.CenterStart) {
+                Text("Лекарство", style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+            }
+            Divider()
+
+            // Строки с названиями лекарств
+            meds.forEach { med ->
+                Column(
+                    modifier = Modifier.height(rowHeight).padding(horizontal = 8.dp),
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        text = med.name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    // Используем функцию форматирования из ViewModel (например, "08:30 · до еды")
+                    Text(
+                        text = "${String.format("%02d:%02d", med.hour, med.minute)} ${med.notes}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.Gray,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+                Divider()
+            }
+        }
+
+        // 2. ПРАВАЯ ПРОКРУЧИВАЕМАЯ ПАНЕЛЬ (Даты + Галочки)
+        Row(modifier = Modifier.horizontalScroll(horizontalScroll)) {
+            val dateFmt = DateTimeFormatter.ofPattern("dd.MM")
+
+            courseDays.forEach { date ->
+                Column(modifier = Modifier.width(64.dp)) {
+                    // Заголовок столбца с датой
+                    Box(modifier = Modifier.height(48.dp).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Text(
+                            text = date.format(dateFmt),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = if (date == LocalDate.now()) MaterialTheme.colorScheme.primary else Color.Unspecified
+                        )
+                    }
+                    Divider()
+
+                    // Ячейки с чекбоксами для текущего дня
+                    meds.forEach { med ->
+                        Box(modifier = Modifier.height(rowHeight).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            Checkbox(
+                                checked = scheduleState.isTakenOn(med.id, date),
+                                onCheckedChange = { isChecked -> onToggle(med, date, isChecked) }
+                            )
+                        }
+                        Divider()
+                    }
+                }
+            }
+        }
+    }
 }

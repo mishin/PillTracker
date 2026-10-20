@@ -109,6 +109,11 @@ class MedicationViewModel(private val dao: MedicationDao) : ViewModel() {
 
     fun toggleTaken(med: Medication, taken: Boolean) {
         val day = schedule.value.selectedDay
+        toggleTakenOnDay(med, day, taken) // Перенаправляем на новый метод
+    }
+
+    // НОВЫЙ МЕТОД: Позволяет ставить галочку для любой даты из сетки
+    fun toggleTakenOnDay(med: Medication, day: LocalDate, taken: Boolean) {
         viewModelScope.launch {
             if (taken) {
                 dao.upsertIntake(DoseIntake(med.id, day.toEpochDay(), taken = true))
