@@ -24,7 +24,6 @@ data class Medication(
     val minute: Int,
     val startTimestamp: Long,
     val durationDays: Int,
-    val isTakenToday: Boolean = false,
     val notes: String = "",
     val timeLabel: String = ""
 )
@@ -64,9 +63,6 @@ interface MedicationDao {
 
     @Delete
     suspend fun delete(medication: Medication)
-
-    @Query("UPDATE medications SET isTakenToday = 0")
-    suspend fun resetDailyIntake()
 
     @Query("DELETE FROM medications")
     suspend fun clearAll(): Int
@@ -117,6 +113,31 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL(
                     "CREATE INDEX IF NOT EXISTS index_dose_intakes_medicationId ON dose_intakes(medicationId)"
                 )
+            }
+        }
+
+        // НОВАЯ МИГРАЦИЯ: Удаляем колонку isTakenToday
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // В SQLite нельзя просто удалить колонку, поэтому пересоздаем таблицу
+                db.execSQL("""
+                    CREATE TABLE medications_new (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        name TEXT NOT NULL,
+                        hour INTEGER NOT NULL,
+                        minute INTEGER NOT NULL,
+                        startTimestamp INTEGER NOT NULL,
+                        durationDays INTEGER NOT NULL,
+                        notes TEXT NOT NULL,
+                        timeLabel TEXT NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    INSERT INTO medications_new (id, name, hour, minute, startTimestamp, durationDays, notes, timeLabel)
+                    SELECT id, name, hour, minute, startTimestamp, durationDays, notes, timeLabel FROM medications
+                """.trimIndent())
+                db.execSQL("DROP TABLE medications")
+                db.execSQL("ALTER TABLE medications_new RENAME TO medications")
             }
         }
     }

@@ -35,7 +35,6 @@ import ru.mishin.pilltracker.data.DatabaseProvider
 import ru.mishin.pilltracker.data.Medication
 import ru.mishin.pilltracker.view.MedicationViewModel
 import ru.mishin.pilltracker.service.scheduleMedicationAlarm
-import ru.mishin.pilltracker.util.scheduleDailyReset
 import android.net.Uri
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Link
@@ -44,6 +43,11 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
 import ru.mishin.pilltracker.data.MedicationRepository
+
+import android.app.AlarmManager
+import android.content.Context
+import android.content.Intent
+import android.provider.Settings
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -80,6 +84,11 @@ fun MedicationAppScreen(viewModel: MedicationViewModel) {
     var showUrlDialog by remember { mutableStateOf(false) }
     var inputUrl by remember { mutableStateOf("") }
 
+    // ЛАУНЧЕР ДЛЯ РАЗРЕШЕНИЯ БУДИЛЬНИКОВ (API 31+)
+    val exactAlarmLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { _ -> }
+
     // Лаунчер разрешений (существующий)
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
@@ -111,8 +120,20 @@ fun MedicationAppScreen(viewModel: MedicationViewModel) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-        scheduleDailyReset(context)
+
+        // Проверка разрешения на точные будильники (Android 12+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+            if (!alarmManager.canScheduleExactAlarms()) {
+                // Открываем настройки, чтобы пользователь разрешил
+                val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                    data = android.net.Uri.parse("package:${context.packageName}")
+                }
+                exactAlarmLauncher.launch(intent)
+            }
+        }
     }
+
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -148,13 +169,15 @@ fun MedicationAppScreen(viewModel: MedicationViewModel) {
                 )
             } else {
                 val days = scheduleState.courseDays.ifEmpty { listOf(LocalDate.now()) }
-                MedicationGrid(
+                // ИСПРАВЛЕНИЕ 1: Передаем scheduleState.selectedDay вместо списка days
+                DailyMedicationList(
                     meds = medications,
-                    courseDays = days,
+                    selectedDay = scheduleState.selectedDay,
                     scheduleState = scheduleState,
                     onToggle = { med, date, checked ->
                         viewModel.toggleTakenOnDay(med, date, checked)
-                    }
+                    },
+                    onDelete = { med -> viewModel.deleteMedication(med) } // ИСПРАВЛЕНИЕ 2: Добавили удаление
                 )
             }
         }
@@ -273,62 +296,61 @@ private fun launchCsvImport(
 }
 
 @Composable
-fun MedicationCard(
-    medication: Medication,
-    daysLeft: Int,
-    onCheckedChange: (Boolean) -> Unit,
-    onDelete: () -> Unit
-) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(text = medication.name, style = MaterialTheme.typography.titleLarge)
-                Text(text = "Время: ${String.format("%02d:%02d", medication.hour, medication.minute)}")
-                Text(
-                    text = "Осталось дней: $daysLeft из ${medication.durationDays}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.secondary
-                )
-            }
-            Checkbox(
-                checked = medication.isTakenToday,
-                onCheckedChange = onCheckedChange
-            )
-            IconButton(onClick = onDelete) {
-                Icon(Icons.Filled.Delete, contentDescription = "Удалить")
-            }
-        }
-    }
-}
-
-@Composable
 fun AddMedicationDialog(onDismiss: () -> Unit, onSave: (String, Int, Int, Int) -> Unit) {
     var name by remember { mutableStateOf("") }
     var hour by remember { mutableStateOf("08") }
     var minute by remember { mutableStateOf("00") }
     var duration by remember { mutableStateOf("14") }
 
+    // ВАЛИДАЦИЯ
+    val isHourValid = (hour.toIntOrNull() ?: -1) in 0..23
+    val isMinuteValid = (minute.toIntOrNull() ?: -1) in 0..59
+    val isDurationValid = (duration.toIntOrNull() ?: 0) > 0
+    val isFormValid = name.isNotBlank() && isHourValid && isMinuteValid && isDurationValid
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Новое лекарство") },
         text = {
             Column {
-                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Название") })
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Название") },
+                    isError = name.isBlank()
+                )
                 Row {
-                    OutlinedTextField(value = hour, onValueChange = { hour = it }, label = { Text("Час (0-23)") }, modifier = Modifier.weight(1f))
+                    OutlinedTextField(
+                        value = hour,
+                        onValueChange = { if (it.length <= 2) hour = it },
+                        label = { Text("Час (0-23)") },
+                        modifier = Modifier.weight(1f),
+                        isError = !isHourValid
+                    )
                     Spacer(Modifier.width(8.dp))
-                    OutlinedTextField(value = minute, onValueChange = { minute = it }, label = { Text("Мин") }, modifier = Modifier.weight(1f))
+                    OutlinedTextField(
+                        value = minute,
+                        onValueChange = { if (it.length <= 2) minute = it },
+                        label = { Text("Мин") },
+                        modifier = Modifier.weight(1f),
+                        isError = !isMinuteValid
+                    )
                 }
-                OutlinedTextField(value = duration, onValueChange = { duration = it }, label = { Text("Дней курса") })
+                OutlinedTextField(
+                    value = duration,
+                    onValueChange = { duration = it },
+                    label = { Text("Дней курса") },
+                    isError = !isDurationValid
+                )
             }
         },
         confirmButton = {
-            Button(onClick = { 
-                onSave(name, hour.toIntOrNull() ?: 8, minute.toIntOrNull() ?: 0, duration.toIntOrNull() ?: 1) 
-            }) { Text("Сохранить") }
+            Button(
+                onClick = {
+                    onSave(name, hour.toInt(), minute.toInt(), duration.toInt())
+                },
+                enabled = isFormValid // Блокируем кнопку, если есть ошибки
+            ) { Text("Сохранить") }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Отмена") }
@@ -411,6 +433,67 @@ fun MedicationGrid(
                         Divider()
                     }
                 }
+            }
+        }
+    }
+}
+
+// ОБНОВЛЕННЫЙ СПИСОК
+@Composable
+fun DailyMedicationList(
+    meds: List<Medication>,
+    selectedDay: LocalDate,
+    scheduleState: ScheduleUiState,
+    onToggle: (Medication, LocalDate, Boolean) -> Unit,
+    onDelete: (Medication) -> Unit // Добавили коллбэк для удаления
+) {
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        items(meds, key = { it.id }) { med ->
+            MedicationCard(
+                medication = med,
+                isTaken = scheduleState.isTakenOn(med.id, selectedDay),
+                onCheckedChange = { checked -> onToggle(med, selectedDay, checked) },
+                onDelete = { onDelete(med) }
+            )
+        }
+    }
+}
+
+// ОСТАВЬТЕ ТОЛЬКО ЭТУ ФУНКЦИЮ MedicationCard
+@Composable
+fun MedicationCard(
+    medication: Medication,
+    isTaken: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    onDelete: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isTaken) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = medication.name, style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = "Время: ${String.format("%02d:%02d", medication.hour, medication.minute)}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                if (medication.notes.isNotBlank()) {
+                    Text(text = medication.notes, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
+                }
+            }
+            Checkbox(checked = isTaken, onCheckedChange = onCheckedChange)
+            IconButton(onClick = onDelete) {
+                Icon(Icons.Filled.Delete, contentDescription = "Удалить")
             }
         }
     }

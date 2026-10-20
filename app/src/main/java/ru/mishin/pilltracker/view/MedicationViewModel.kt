@@ -119,9 +119,6 @@ class MedicationViewModel(
             } else {
                 repository.deleteIntake(med.id, day.toEpochDay())
             }
-            if (day == LocalDate.now()) {
-                repository.update(med.copy(isTakenToday = taken))
-            }
         }
     }
 
@@ -214,7 +211,7 @@ class MedicationViewModel(
             }
         }
     }
-    
+
     fun exportToCsv(
         context: Context,
         onSuccess: (Uri) -> Unit,
