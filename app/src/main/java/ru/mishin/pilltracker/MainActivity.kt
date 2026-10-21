@@ -49,6 +49,15 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.foundation.clickable
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.background
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -160,16 +169,47 @@ fun MedicationAppScreen(viewModel: MedicationViewModel) {
         }
     ) { padding ->
 // ИЗМЕНЕНИЕ: Вместо LazyColumn рисуем нашу Excel-подобную сетку
-        Box(modifier = Modifier.fillMaxSize().padding(padding)) {
+// ИЗМЕНЕНИЕ: Используем Column вместо Box для размещения выбора дат и списка
+        Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             if (medications.isEmpty()) {
-                Text(
-                    text = "Список пуст. Добавьте лекарства или загрузите график.",
-                    modifier = Modifier.align(Alignment.Center).padding(16.dp),
-                    style = MaterialTheme.typography.bodyLarge
-                )
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        text = "Список пуст. Добавьте лекарства или загрузите график.",
+                        modifier = Modifier.padding(16.dp),
+                        style = MaterialTheme.typography.bodyLarge
+                    )
+                }
             } else {
                 val days = scheduleState.courseDays.ifEmpty { listOf(LocalDate.now()) }
-                // ИСПРАВЛЕНИЕ 1: Передаем scheduleState.selectedDay вместо списка days
+
+                // НОВЫЙ ЭЛЕМЕНТ: Горизонтальный выбор дат
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(days, key = { it.toEpochDay() }) { date ->
+                        val isSelected = date == scheduleState.selectedDay
+                        val dateFmt = DateTimeFormatter.ofPattern("dd.MM")
+
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant)
+                                .clickable { viewModel.selectDay(date) }
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = date.format(dateFmt),
+                                color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface,
+                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+                            )
+                        }
+                    }
+                }
+
+                // СПИСОК ЛЕКАРСТВ
                 DailyMedicationList(
                     meds = medications,
                     selectedDay = scheduleState.selectedDay,
@@ -177,7 +217,7 @@ fun MedicationAppScreen(viewModel: MedicationViewModel) {
                     onToggle = { med, date, checked ->
                         viewModel.toggleTakenOnDay(med, date, checked)
                     },
-                    onDelete = { med -> viewModel.deleteMedication(med) } // ИСПРАВЛЕНИЕ 2: Добавили удаление
+                    onDelete = { med -> viewModel.deleteMedication(med) }
                 )
             }
         }
@@ -464,6 +504,7 @@ fun DailyMedicationList(
 }
 
 // ОСТАВЬТЕ ТОЛЬКО ЭТУ ФУНКЦИЮ MedicationCard
+// ОБНОВЛЕННАЯ ФУНКЦИЯ MedicationCard
 @Composable
 fun MedicationCard(
     medication: Medication,
@@ -474,26 +515,44 @@ fun MedicationCard(
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = if (isTaken) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant
-        )
+            containerColor = if (isTaken) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Row(
             modifier = Modifier.padding(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(text = medication.name, style = MaterialTheme.typography.titleMedium)
+                Text(text = medication.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
                     text = "Время: ${String.format("%02d:%02d", medication.hour, medication.minute)}",
-                    style = MaterialTheme.typography.bodySmall
+                    style = MaterialTheme.typography.bodyMedium
                 )
                 if (medication.notes.isNotBlank()) {
                     Text(text = medication.notes, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.secondary)
                 }
             }
-            Checkbox(checked = isTaken, onCheckedChange = onCheckedChange)
+
+            // ИЗМЕНЕНИЕ: Кастомная зеленая кнопка-галочка вместо Checkbox
+            IconButton(
+                onClick = { onCheckedChange(!isTaken) },
+                modifier = Modifier
+                    .padding(end = 8.dp)
+                    .clip(CircleShape)
+                    .background(if (isTaken) Color(0xFF4CAF50).copy(alpha = 0.2f) else MaterialTheme.colorScheme.surfaceVariant)
+            ) {
+                Icon(
+                    imageVector = if (isTaken) Icons.Filled.Check else Icons.Filled.Add,
+                    contentDescription = if (isTaken) "Принято" else "Отметить",
+                    tint = if (isTaken) Color(0xFF4CAF50) else Color.Gray, // Зеленый цвет для галочки
+                    modifier = Modifier.size(28.dp)
+                )
+            }
+
             IconButton(onClick = onDelete) {
-                Icon(Icons.Filled.Delete, contentDescription = "Удалить")
+                Icon(Icons.Filled.Delete, contentDescription = "Удалить", tint = MaterialTheme.colorScheme.error)
             }
         }
     }

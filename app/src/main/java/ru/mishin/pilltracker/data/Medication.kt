@@ -79,7 +79,7 @@ interface MedicationDao {
 
 @Database(
     entities = [Medication::class, DoseIntake::class],
-    version = 3,
+    version = 4, // ИСПРАВЛЕНИЕ: Изменили версию базы данных с 3 на 4
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
